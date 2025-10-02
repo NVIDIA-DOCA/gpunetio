@@ -1,0 +1,65 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+*.dirstamp
+*.deps
+*.log
+*.status
+
+#emacs backup files
+#++++
+*.*~
+
+# Vim backup files
+*.*.swp
+
+# IDE trash folder
+.idea
+.vscode
+.ccls-cache
+
+# tarballs
+*.tar
+
+# Build and install targets
+build/
+bin/
+install/
+git_commit.txt
+version.txt
+
+# local debug for coverity
+.gitlab-ci-4-coverity.yml
+.Makefile*
+.version.mk
+.common.mk
