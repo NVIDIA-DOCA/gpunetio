@@ -24,7 +24,7 @@ It is important to note, however, that the CUDA header files for the GPUNetIO Ve
 
 ## Goals
 
-The overarching goal of DOCA GPUNetIO (both Open Source and Full) is to consolidate multiple GDAKI implementations into a unified driver and library with consistent host- and device-side interfaces. This common foundation can be shared across current and future consumers of GDAKI technology such as [NVSHMEM](https://docs.nvidia.com/nvshmem/api/using.html#using-the-nvshmem-infiniband-gpudirect-async-transport), [NCCL](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage.html), and [GPUDirect](https://gitlab-master.nvidia.com/gpudirect/perftest).
+The overarching goal of DOCA GPUNetIO (both Open Source and Full) is to consolidate multiple GDAKI implementations into a unified driver and library with consistent host- and device-side interfaces. This common foundation can be shared across current and future consumers of GDAKI technology such as [NVSHMEM](https://docs.nvidia.com/nvshmem/api/using.html#using-the-nvshmem-infiniband-gpudirect-async-transport), [NCCL](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage.html), and GPUDirect.
 This approach promotes knowledge sharing while reducing the engineering effort required for long-term maintenance.
 
 
