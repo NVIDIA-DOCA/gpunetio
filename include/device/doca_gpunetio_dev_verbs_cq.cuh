@@ -192,7 +192,8 @@ __device__ static __forceinline__ int doca_priv_gpu_dev_verbs_poll_cq_at(
 #if __CUDA_ARCH__ >= 900
     do {
         cqe_ci = doca_gpu_dev_verbs_load_relaxed<resource_sharing_mode>(&cq->cqe_ci);
-        [[unlikely]] if (cons_index < cqe_ci) return 0;
+        [[unlikely]] if (cons_index < cqe_ci)
+            return 0;
         opown = doca_gpu_dev_verbs_load_relaxed_sys_global((uint8_t *)&cqe64->op_own);
     } while ((cons_index >= cqe_ci + cqe_num) ||
              ((cqe_ci <= cons_index) &&
@@ -203,7 +204,8 @@ __device__ static __forceinline__ int doca_priv_gpu_dev_verbs_poll_cq_at(
 
     do {
         cqe_ci = doca_gpu_dev_verbs_load_relaxed<resource_sharing_mode>(&cq->cqe_ci);
-        [[unlikely]] if (cons_index < cqe_ci) return 0;
+        [[unlikely]] if (cons_index < cqe_ci)
+            return 0;
         cqe_chunk = doca_gpu_dev_verbs_load_relaxed_sys_global((uint32_t *)&cqe64->wqe_counter);
         cqe_chunk = doca_gpu_dev_verbs_bswap32(cqe_chunk);
         wqe_counter = cqe_chunk >> 16;

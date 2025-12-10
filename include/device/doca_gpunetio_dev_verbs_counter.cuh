@@ -198,8 +198,7 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_counter(
                 DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, 0,
                 raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
                 laddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), laddr.key, size_);
-        }
-        else {
+        } else {
             doca_gpu_dev_verbs_wqe_prepare_nop(qp, wqe_ptr, wqe_idx,
                                                DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE);
         }
@@ -323,8 +322,7 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal_counter(
                 DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, 0,
                 raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
                 laddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), laddr.key, size_);
-        }
-        else {
+        } else {
             doca_gpu_dev_verbs_wqe_prepare_nop(qp, wqe_ptr, wqe_idx,
                                                DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE);
         }

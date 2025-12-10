@@ -233,8 +233,8 @@ static doca_error_t create_cq(struct doca_gpu *gpu_dev, struct ibv_pd *ibpd,
     DOCA_LOG(LOG_DEBUG, "Create CQ memcpy cq_ring_haddr %p into gpu_umem_dev_ptr %p size %d\n",
              (void *)(cq_ring_haddr), (*gpu_umem_dev_ptr), external_umem_size);
 
-    status_cuda = cudaMemcpy((*gpu_umem_dev_ptr), (void *)(cq_ring_haddr), external_umem_size,
-                             cudaMemcpyDefault);
+    status_cuda = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaMemcpy(
+        (*gpu_umem_dev_ptr), (void *)(cq_ring_haddr), external_umem_size, cudaMemcpyDefault));
     if (status_cuda != cudaSuccess) {
         DOCA_LOG(LOG_ERR, "Failed to cudaMempy gpu cq cq ring buffer ret %d", status_cuda);
         goto destroy_resources;
@@ -877,12 +877,14 @@ doca_error_t doca_gpu_verbs_qp_flat_list_create_hl(struct doca_gpu_verbs_qp_hl *
 
     if (num_elems == 0 || qp_list == nullptr || qp_gpu == nullptr) return DOCA_ERROR_INVALID_VALUE;
 
-    error = cudaMalloc((void **)&qp_gpu_, sizeof(struct doca_gpu_dev_verbs_qp) * num_elems);
+    error = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+        cudaMalloc((void **)&qp_gpu_, sizeof(struct doca_gpu_dev_verbs_qp) * num_elems));
     if (error != cudaSuccess) return DOCA_ERROR_NO_MEMORY;
 
     for (uint32_t i = 0; i < num_elems; i++) {
-        error = cudaMemcpy(qp_gpu_ + i, qp_list[i]->qp_gverbs->qp_cpu,
-                           sizeof(struct doca_gpu_dev_verbs_qp), cudaMemcpyDefault);
+        error = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+            cudaMemcpy(qp_gpu_ + i, qp_list[i]->qp_gverbs->qp_cpu,
+                       sizeof(struct doca_gpu_dev_verbs_qp), cudaMemcpyDefault));
         if (error != cudaSuccess) goto exit_error;
     }
 
@@ -891,13 +893,13 @@ doca_error_t doca_gpu_verbs_qp_flat_list_create_hl(struct doca_gpu_verbs_qp_hl *
     return status;
 
 exit_error:
-    cudaFree(qp_gpu);
+    DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaFree(qp_gpu));
     return status;
 }
 
 doca_error_t doca_gpu_verbs_qp_flat_list_destroy_hl(struct doca_gpu_dev_verbs_qp *qp_gpu) {
     if (qp_gpu == nullptr) return DOCA_ERROR_INVALID_VALUE;
 
-    cudaFree(qp_gpu);
+    DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaFree(qp_gpu));
     return DOCA_SUCCESS;
 }
