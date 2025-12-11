@@ -12,8 +12,8 @@ The table below highlights the key differences between this DOCA GPUNetIO open-s
 
 | Item | DOCA Full SDK | DOCA Open Source |
 | ---- | ------------- | ---------------- |
-| Verbs CPU control path | Closed-source shared library | Open-source C++ files |
-| GPUNetIO CPU control path | Closed-source shared library | Open-source C++ files |
+| Verbs CPU control path | Close-source shared library | Open-source C++ files |
+| GPUNetIO CPU control path | Close-source shared library | Open-source C++ files |
 | GPUNetIO GPU data path for RDMA Verbs one-sided | Yes | Yes |
 | GPUNetIO GPU data path for RDMA Verbs two-sided | Yes | No |
 | GPUNetIO GPU data path for Ethernet | Yes | No |
@@ -24,7 +24,7 @@ It is important to note, however, that the CUDA header files for the GPUNetIO Ve
 
 ## Goals
 
-The overarching goal of DOCA GPUNetIO (both Open Source and Full) is to consolidate multiple GDAKI implementations into a unified driver and library with consistent host- and device-side interfaces. This common foundation can be shared across current and future consumers of GDAKI technology such as [NVSHMEM](https://docs.nvidia.com/nvshmem/api/using.html#using-the-nvshmem-infiniband-gpudirect-async-transport), [NCCL](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage.html), and [GPUDirect](https://gitlab-master.nvidia.com/gpudirect/perftest).
+The overarching goal of DOCA GPUNetIO (both Open Source and Full) is to consolidate multiple GDAKI implementations into a unified driver and library with consistent host- and device-side interfaces. This common foundation can be shared across current and future consumers of GDAKI technology such as [NVSHMEM](https://docs.nvidia.com/nvshmem/api/using.html#using-the-nvshmem-infiniband-gpudirect-async-transport), [NCCL](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage.html), and GPUDirect.
 This approach promotes knowledge sharing while reducing the engineering effort required for long-term maintenance.
 
 
