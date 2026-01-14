@@ -147,13 +147,13 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_fence_acquire() {
 #else
     // fence.acquire is not available in PTX. Emulate that with st.release.
     uint32_t dummy;
-    const uint32_t val = 0;
+    uint32_t val = 0;
     if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_CTA)
-        asm volatile("ld.acquire.cta.b32 %0, [%1];" : : "r"(val), "l"(&dummy));
+        asm volatile("ld.acquire.cta.b32 %0, [%1];" : "=r"(val) : "l"(&dummy));
     else if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU)
-        asm volatile("ld.acquire.gpu.b32 %0, [%1];" : : "r"(val), "l"(&dummy));
+        asm volatile("ld.acquire.gpu.b32 %0, [%1];" : "=r"(val) : "l"(&dummy));
     else
-        asm volatile("ld.acquire.sys.b32 %0, [%1];" : : "r"(val), "l"(&dummy));
+        asm volatile("ld.acquire.sys.b32 %0, [%1];" : "=r"(val) : "l"(&dummy));
 #endif
 }
 

@@ -508,17 +508,25 @@ static std::mutex registered_uar_mutex;
 doca_error_t doca_gpu_verbs_can_gpu_register_uar(void *db, bool *out_can_register) {
     std::lock_guard<std::mutex> lock(registered_uar_mutex);
     cudaError_t cuda_status = cudaSuccess;
+    static bool can_register = false;
+    static bool registration_checked = false;
 
-    if (db == nullptr || out_can_register == nullptr) return DOCA_ERROR_INVALID_VALUE;
+    if (out_can_register == nullptr) return DOCA_ERROR_INVALID_VALUE;
 
-    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaHostRegister(
-        db, DOCA_VERBS_DB_UAR_SIZE,
-        cudaHostRegisterPortable | cudaHostRegisterMapped | cudaHostRegisterIoMemory));
+    if (!registration_checked) {
+        if (db == nullptr) return DOCA_ERROR_INVALID_VALUE;
+        cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaHostRegister(
+            db, DOCA_VERBS_DB_UAR_SIZE,
+            cudaHostRegisterPortable | cudaHostRegisterMapped | cudaHostRegisterIoMemory));
 
-    *out_can_register =
-        (cuda_status == cudaSuccess || cuda_status == cudaErrorHostMemoryAlreadyRegistered);
+        can_register =
+            (cuda_status == cudaSuccess || cuda_status == cudaErrorHostMemoryAlreadyRegistered);
 
-    if (cuda_status == cudaSuccess) DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaHostUnregister(db));
+        if (cuda_status == cudaSuccess) DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaHostUnregister(db));
+        registration_checked = true;
+    }
+
+    *out_can_register = can_register;
 
     return DOCA_SUCCESS;
 }
