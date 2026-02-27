@@ -300,6 +300,7 @@ doca_error_t create_verbs_resources(struct verbs_config *cfg, struct verbs_resou
     qp_init.sq_nwqe = VERBS_TEST_QUEUE_SIZE;
     qp_init.nic_handler = resources->nic_handler;
     qp_init.mreg_type = DOCA_GPUNETIO_VERBS_MEM_REG_TYPE_DEFAULT;
+    qp_init.send_dbr_mode_ext = resources->send_dbr_mode_ext;
 
     status = doca_gpu_verbs_create_qp_hl(&qp_init, &(resources->qp));
     if (status != DOCA_SUCCESS) {
@@ -537,7 +538,7 @@ void *progress_cpu_proxy(void *args_) {
            *((volatile uint64_t *)args->exit_flag));
 
     while (*((volatile uint64_t *)args->exit_flag) == 0) {
-        doca_gpu_verbs_cpu_proxy_progress(args->qp_cpu);
+        doca_gpu_verbs_cpu_proxy_progress(args->qp_cpu, NULL);
     }
 
     return NULL;

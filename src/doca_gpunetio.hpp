@@ -32,68 +32,29 @@
 
 #include <unistd.h>
 #include <stdlib.h>
-#include <mutex>
-#include <time.h>
 
-#include "host/mlx5_prm.h"
-#include "host/mlx5_ifc.h"
+#include <unordered_map>
 
-#include "doca_internal.hpp"
+#include "doca_verbs_cuda_wrapper.h"
 
-/**
- *  @brief This struct implements the doca rdma_verbs device attributes
- */
-struct doca_verbs_device_attr {
-   public:
-    /**
-     * @brief constructor
-     *
-     * @param [in] ibv_ctx
-     * IBV context to query device attributes from
-     *
-     */
-    doca_verbs_device_attr(struct ibv_context *ibv_ctx);
-
-    /**
-     * @brief destructor
-     */
-    ~doca_verbs_device_attr() = default;
-
-    /**
-     * @brief Query device capabilities
-     *
-     * @param [in] ibv_ctx
-     * IBV context to query device attributes from
-     *
-     */
-    void query_caps(struct ibv_context *ibv_ctx);
-
-    uint32_t m_max_qp{};
-    uint32_t m_max_qp_wr{};
-    uint32_t m_max_sge{};
-    uint32_t m_max_cq{};
-    uint32_t m_max_cqe{};
-    uint32_t m_max_mr{};
-    uint32_t m_max_pd{};
-    uint32_t m_max_ah{};
-    uint32_t m_max_srq{};
-    uint32_t m_max_srq_wr{};
-    uint32_t m_max_srq_sge{};
-    uint32_t m_max_pkeys{};
-    uint32_t m_max_sq_desc_size{};
-    uint32_t m_max_rq_desc_size{};
-    uint32_t m_max_send_wqebb{};
-    uint16_t m_min_udp_sport{};
-    uint16_t m_max_udp_sport{};
-    uint16_t m_gid_table_size{};
-    uint8_t m_is_qp_rc_supported{};
-    uint8_t m_port_type{};
-    uint8_t m_is_rts2rts_qp_dscp_supported{};
-    uint8_t m_phys_port_cnt{};
-    uint8_t m_send_dbr_mode_no_dbr_ext{};
-    uint8_t m_max_qp_init_rd_atom{};
-    uint8_t m_max_qp_rd_atom{};
-
-   private:
-    doca_verbs_device_attr &operator=(doca_verbs_device_attr const &) = delete;
+struct doca_gpu {
+    CUdevice cuda_dev; /* CUDA device handler */
+    std::unordered_map<uintptr_t, struct doca_gpu_mtable *>
+        *mtable;                       /* Table of GPU/CPU memory allocated addresses */
+    bool support_gdrcopy;              ///< Boolean value that indicates if gdrcopy is
+                                       ///< supported
+    bool support_dmabuf;               ///< Boolean value that indicates if dmabuf is
+                                       ///< supported by the gpu
+    bool support_wq_gpumem;            ///< Boolean value that indicates if gpumem is
+                                       ///< available and nic-gpu mapping is supported
+    bool support_cq_gpumem;            ///< Boolean value that indicates if gpumem is
+                                       ///< available and nic-gpu mapping is supported
+    bool support_uar_gpumem;           ///< Boolean value that indicates if gpumem is
+                                       ///< available and gpu-nic mapping is supported
+    bool support_async_store_release;  ///< Boolean value that indicates if
+                                       ///< async store release is supported
+    bool support_bf_uar;               ///< Boolean value that indicates if BlueFlame
+                                       ///< is supported
+    bool need_mcst;                    ///< Boolean value that indicates if memory consistency
+                                       ///< algorithm is required for igress GPU data
 };

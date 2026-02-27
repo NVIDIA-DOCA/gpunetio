@@ -36,18 +36,15 @@
 #DESTLIB = $(DESTDIR)$(libdir)
 #DESTBIN = $(DESTDIR)$(bindir)
 #DESTINC = $(DESTDIR)$(includedir)
-#
-#LIB_MAJOR_VER ?= $(shell awk '/\#define GDR_API_MAJOR_VERSION/ { print $$3 }' include/gdrapi.h | tr -d '\n')
-#LIB_MINOR_VER ?= $(shell awk '/\#define GDR_API_MINOR_VERSION/ { print $$3 }' include/gdrapi.h | tr -d '\n')
 
-PREFIX ?= /usr/local
-SRC_INSTALL_DIR ?= $(PREFIX)/src/doca_gpunetio
+PREFIX ?= /usr/local/gpunetio
 
 VERBOSE ?= 0
 
-MAJOR_VER := 0
-MINOR_VER := 1
-PATCH_VER := 0
+VERSION_FILE := include/common/doca_gpunetio_verbs_def.h
+MAJOR_VER ?= $(shell awk '/define DOCA_GPUNETIO_VERSION_MAJOR / { print $$3 }' $(VERSION_FILE) | tr -d '\n')
+MINOR_VER ?= $(shell awk '/define DOCA_GPUNETIO_VERSION_MINOR / { print $$3 }' $(VERSION_FILE) | tr -d '\n')
+PATCH_VER ?= $(shell awk '/define DOCA_GPUNETIO_VERSION_PATCH / { print $$3 }' $(VERSION_FILE) | tr -d '\n')
 
 VER := $(MAJOR_VER).$(MINOR_VER).$(PATCH_VER)
 
@@ -59,6 +56,11 @@ SCRIPT_DIR := scripts
 OBJ_DIR := obj
 SRC_DIR := src
 TOP_DIR := $(CURDIR)
+
+LIB_INSTALL_DIR := $(DESTDIR)$(PREFIX)/lib
+INC_INSTALL_DIR := $(DESTDIR)$(PREFIX)/include
+SRC_INSTALL_DIR ?= $(DESTDIR)$(PREFIX)/src
+EXAMPLES_INSTALL_DIR ?= $(DESTDIR)$(PREFIX)/examples
 
 USE_CUDA_WRAPPER ?= 0
 USE_NET_WRAPPER ?= 0
@@ -113,6 +115,23 @@ all: lib examples
 version:
 	@ echo "$(VER)"
 
+install: install_lib
+
+install_lib: lib
+	@ echo "Installing library to $(LIB_INSTALL_DIR) and headers to $(INC_INSTALL_DIR)"
+	mkdir -p $(LIB_INSTALL_DIR)
+	install -m 755 $(LIB_DIR)/$(LIB_BASENAME).$(VER) $(LIB_INSTALL_DIR)/
+	cd $(LIB_INSTALL_DIR) && ln -sf $(LIB_FULL_NAME) $(LIB_SONAME)
+	cd $(LIB_INSTALL_DIR) && ln -sf $(LIB_SONAME) $(LIB_BASENAME)
+	mkdir -p $(INC_INSTALL_DIR)
+	install -d $(INC_INSTALL_DIR)/common
+	install -d $(INC_INSTALL_DIR)/device
+	install -d $(INC_INSTALL_DIR)/host
+	install -m 644 $(wildcard $(INC_DIR)/common/*.h $(INC_DIR)/common/*.cuh) $(INC_INSTALL_DIR)/common/
+	install -m 644 $(wildcard $(INC_DIR)/device/*.h $(INC_DIR)/device/*.cuh) $(INC_INSTALL_DIR)/device/
+	install -m 644 $(wildcard $(INC_DIR)/host/*.h $(INC_DIR)/host/*.cuh) $(INC_INSTALL_DIR)/host/
+	install -m 644 $(wildcard $(INC_DIR)/*.h $(INC_DIR)/*.cuh) $(INC_INSTALL_DIR)/
+
 install_src:
 	@ echo "Installing source code to $(SRC_INSTALL_DIR)"
 	mkdir -p $(SRC_INSTALL_DIR)
@@ -131,6 +150,12 @@ install_src:
 	install -m 755 $(SCRIPT_DIR)/configure $(SRC_INSTALL_DIR)/$(SCRIPT_DIR)/
 	install -m 644 $(wildcard $(SRC_DIR)/*.cpp $(SRC_DIR)/*.hpp $(SRC_DIR)/*.h $(SRC_DIR)/*.cu) $(SRC_INSTALL_DIR)/src/
 	install -d $(SRC_INSTALL_DIR)/$(TEST_SRC_DIR) $(SRC_INSTALL_DIR)/$(PERF_SRC_DIR) $(SRC_INSTALL_DIR)/$(API_SRC_DIR) $(SRC_INSTALL_DIR)/$(TEST_UTIL_DIR)
+
+install_examples: examples
+	@ echo "Installing examples to $(EXAMPLES_INSTALL_DIR)"
+	mkdir -p $(EXAMPLES_INSTALL_DIR)
+	install -m 755 examples/gpunetio_verbs_put_bw/gpunetio_verbs_put_bw $(EXAMPLES_INSTALL_DIR)
+	install -m 755 examples/gpunetio_verbs_write_lat/gpunetio_verbs_write_lat $(EXAMPLES_INSTALL_DIR)
 
 $(DOC_LATEX_PACKAGE): $(INCLUDES) $(DOXYFILE)
 	@ mkdir -p $(BLD_DIR)
@@ -181,12 +206,14 @@ clean:
 		$(MAKE) -C $$d clean; \
 	done
 
-examples: $(EXAMPLES_SUBDIRS)
+examples: lib $(EXAMPLES_SUBDIRS)
 $(EXAMPLES_SUBDIRS): lib_configure
 		$(MAKE) -C $@ \
-		TOP_DIR=$(TOP_DIR)
+		TOP_DIR=$(TOP_DIR) \
+		CUDA_HOME=$(CUDA_HOME) \
+		CUDA_ARCH=$(CUDA_ARCH)
 
-.PHONY: clean all lib_configure lib manifest version install_src $(EXAMPLES_SUBDIRS)
+.PHONY: clean all lib_configure lib manifest version install install_lib install_src install_examples $(EXAMPLES_SUBDIRS)
 
 ifeq ($(VERBOSE), 0)
 .SILENT:

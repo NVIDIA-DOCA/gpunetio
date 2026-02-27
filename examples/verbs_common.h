@@ -88,6 +88,7 @@ struct verbs_config {
     uint32_t cuda_threads;       /* cuda threads per cuda block */
     enum doca_gpu_dev_verbs_nic_handler nic_handler;
     uint8_t exec_scope;
+    enum doca_gpu_verbs_send_dbr_mode_ext send_dbr_mode_ext;    /* Enable send dbr mode ext to avoid DBREC update on sending */
 };
 
 struct verbs_resources {
@@ -123,6 +124,8 @@ struct verbs_resources {
 
     uint8_t *local_poll_buf[NUM_MSG_SIZE]; /* The local data buffer */
     uint8_t *local_post_buf[NUM_MSG_SIZE]; /* The local data buffer */
+
+    enum doca_gpu_verbs_send_dbr_mode_ext send_dbr_mode_ext;    /* Enable send dbr mode ext to avoid DBREC update on sending */
 };
 
 struct cpu_proxy_args {
