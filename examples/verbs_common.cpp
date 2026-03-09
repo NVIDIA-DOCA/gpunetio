@@ -237,10 +237,23 @@ doca_error_t create_verbs_resources(struct verbs_config *cfg, struct verbs_resou
     int ret = 0;
     struct ibv_port_attr port_attr;
     struct doca_gpu_verbs_qp_init_attr_hl qp_init;
+    int cuda_id = 0;
+    cudaError_t cuda_ret;
+
     resources->cfg = cfg;
 
     cudaFree(0);
-    cudaSetDevice(0);
+
+    /* In a multi-GPU system, ensure CUDA refers to the right GPU device */
+    cuda_ret = cudaDeviceGetByPCIBusId(&cuda_id, cfg->gpu_pcie_addr.c_str());
+    if (cuda_ret != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Invalid GPU bus id provided %s", cfg->gpu_pcie_addr.c_str());
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    cudaSetDevice(cuda_id);
+
+    DOCA_LOG(LOG_INFO, "Setting GPU device %d at %s", cuda_id, cfg->gpu_pcie_addr.c_str());
 
     status = doca_gpu_create(cfg->gpu_pcie_addr.c_str(), &resources->gpu_dev);
     if (status != DOCA_SUCCESS) {

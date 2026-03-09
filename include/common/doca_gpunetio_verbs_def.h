@@ -78,10 +78,16 @@ extern "C" {
      (DOCA_GPUNETIO_MIN_COMPAT_HOST_CODE_VERSION_MINOR << DOCA_GPUNETIO_VERSION_MINOR_SHIFT) | \
      (DOCA_GPUNETIO_MIN_COMPAT_HOST_CODE_VERSION_PATCH << DOCA_GPUNETIO_VERSION_PATCH_SHIFT))
 
+#ifdef __GNUC__
+#define TYPEOF(x) __typeof__(x)
+#else
+#define TYPEOF(x) decltype(x)
+#endif
+
 /**
  * Macro to temporarily cast a variable to volatile.
  */
-#define DOCA_GPUNETIO_VOLATILE(x) (*(volatile typeof(x) *)&(x))
+#define DOCA_GPUNETIO_VOLATILE(x) (*(volatile TYPEOF(x) *)&(x))
 
 /**
  * Default warp size value of 32 threads
@@ -155,7 +161,7 @@ extern "C" {
     (1ULL << DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE_SHIFT)  // 1GiB
 
 #ifndef ACCESS_ONCE
-#define ACCESS_ONCE(x) (*(volatile typeof(x) *)&(x))
+#define ACCESS_ONCE(x) (*(volatile TYPEOF(x) *)&(x))
 #endif
 
 #ifndef READ_ONCE

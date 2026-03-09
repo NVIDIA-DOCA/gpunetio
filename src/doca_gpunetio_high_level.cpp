@@ -701,7 +701,7 @@ doca_error_t doca_gpu_verbs_create_qp_hl(struct doca_gpu_verbs_qp_init_attr_hl *
         qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY &&
         qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB &&
         qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF) {
-        DOCA_LOG(LOG_ERR, "nic_handler must be AUTO, CPU_PROXY, GPU_SM_DB, or GPU_SM_BF");
+        DOCA_LOG(LOG_ERR, "nic_handler (%d) must be AUTO %d, CPU_PROXY %d, GPU_SM_DB %d, or GPU_SM_BF %d", qp_init_attr->nic_handler, DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO, DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY, DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB, DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF);
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -796,7 +796,7 @@ doca_error_t doca_gpu_verbs_create_qp_group_hl(struct doca_gpu_verbs_qp_init_att
     if (qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO &&
         qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY &&
         qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB) {
-        DOCA_LOG(LOG_ERR, "nic_handler must be AUTO, CPU_PROXY, or GPU_SM_DB");
+        DOCA_LOG(LOG_ERR, "nic_handler (%d) must be AUTO %d, CPU_PROXY %d, GPU_SM_DB %d, or GPU_SM_BF %d", qp_init_attr->nic_handler, DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO, DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY, DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB, DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF);
         return DOCA_ERROR_INVALID_VALUE;
     }
 

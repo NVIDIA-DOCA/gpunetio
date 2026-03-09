@@ -88,7 +88,8 @@ struct verbs_config {
     uint32_t cuda_threads;       /* cuda threads per cuda block */
     enum doca_gpu_dev_verbs_nic_handler nic_handler;
     uint8_t exec_scope;
-    enum doca_gpu_verbs_send_dbr_mode_ext send_dbr_mode_ext;    /* Enable send dbr mode ext to avoid DBREC update on sending */
+    enum doca_gpu_verbs_send_dbr_mode_ext
+        send_dbr_mode_ext; /* Enable send dbr mode ext to avoid DBREC update on sending */
 };
 
 struct verbs_resources {
@@ -102,21 +103,23 @@ struct verbs_resources {
     struct ibv_pd *verbs_pd;                  /* local protection domain */
     struct doca_verbs_ah_attr *verbs_ah_attr; /* DOCA Verbs address handle */
     struct doca_gpu_verbs_qp_hl *qp;          /* DOCA GPUNetIO high-level Verbs QP */
-    int conn_socket;                          /* Connection socket fd */
-    uint32_t local_qp_number;                 /* Local QP number */
-    uint32_t remote_qp_number;                /* Remote QP number */
-    uint32_t remote_data_mkey[NUM_MSG_SIZE];  /* remote MKEY */
-    uint32_t remote_flag_mkey[NUM_MSG_SIZE];  /* remote MKEY */
-    struct ibv_mr *data_mr[NUM_MSG_SIZE];     /* local memory region */
-    struct ibv_mr *flag_mr[NUM_MSG_SIZE];     /* local memory region */
-    struct doca_verbs_gid gid;                /* local gid address */
-    struct doca_verbs_gid remote_gid;         /* remote gid address */
-    int lid;                                  /* IB: local ID */
-    int dlid;                                 /* IB: destination ID */
-    uint32_t num_iters;                       /* total number of iterations per cuda kernel */
-    uint32_t cuda_threads;                    /* threads */
+    bool qp_group;
+    int conn_socket;                         /* Connection socket fd */
+    uint32_t local_qp_number;                /* Local QP number */
+    uint32_t remote_qp_number;               /* Remote QP number */
+    uint32_t remote_data_mkey[NUM_MSG_SIZE]; /* remote MKEY */
+    uint32_t remote_flag_mkey[NUM_MSG_SIZE]; /* remote MKEY */
+    struct ibv_mr *data_mr[NUM_MSG_SIZE];    /* local memory region */
+    struct ibv_mr *flag_mr[NUM_MSG_SIZE];    /* local memory region */
+    struct doca_verbs_gid gid;               /* local gid address */
+    struct doca_verbs_gid remote_gid;        /* remote gid address */
+    int lid;                                 /* IB: local ID */
+    int dlid;                                /* IB: destination ID */
+    uint32_t num_iters;                      /* total number of iterations per cuda kernel */
+    uint32_t cuda_threads;                   /* threads */
     enum doca_gpu_dev_verbs_nic_handler nic_handler; /* enable CPU proxy */
     enum doca_gpu_dev_verbs_exec_scope scope;
+    uint8_t cq_collapsed; /* enable/disable cq collapsed */
 
     /* write_lat test */
     struct ibv_mr *local_poll_mr[NUM_MSG_SIZE]; /* local memory region */
@@ -125,11 +128,14 @@ struct verbs_resources {
     uint8_t *local_poll_buf[NUM_MSG_SIZE]; /* The local data buffer */
     uint8_t *local_post_buf[NUM_MSG_SIZE]; /* The local data buffer */
 
-    enum doca_gpu_verbs_send_dbr_mode_ext send_dbr_mode_ext;    /* Enable send dbr mode ext to avoid DBREC update on sending */
+    enum doca_gpu_verbs_send_dbr_mode_ext
+        send_dbr_mode_ext; /* Enable send dbr mode ext to avoid DBREC update on sending */
 };
 
 struct cpu_proxy_args {
     struct doca_gpu_verbs_qp *qp_cpu;
+    struct doca_gpu_verbs_qp *qp_cpu_companion;
+
     uint64_t *exit_flag;
 };
 
@@ -244,12 +250,11 @@ size_t get_page_size(void);
 extern "C" {
 #endif
 
-doca_error_t gpunetio_verbs_write_lat(cudaStream_t stream, struct doca_gpu_dev_verbs_qp *qp,
-                                      uint32_t num_iters, uint32_t cuda_blocks,
-                                      uint32_t cuda_threads, uint32_t size, uint8_t *local_poll_buf,
-                                      uint32_t local_poll_mkey, uint8_t *local_post_buf,
-                                      uint32_t local_post_mkey, uint8_t *dst_buf, uint32_t dst_mkey,
-                                      bool is_client);
+doca_error_t gpunetio_verbs_write_lat(
+    cudaStream_t stream, struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, uint32_t cuda_blocks,
+    uint32_t cuda_threads, uint32_t size, uint8_t *local_poll_buf, uint32_t local_poll_mkey,
+    uint8_t *local_post_buf, uint32_t local_post_mkey, uint8_t *dst_buf, uint32_t dst_buf_mkey,
+    enum doca_gpu_dev_verbs_nic_handler nic_handler, bool is_client);
 
 /*
  * Launch a CUDA kernel with to measure One-Sided Put Shared QP bandwidth

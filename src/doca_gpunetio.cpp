@@ -1186,6 +1186,7 @@ doca_error_t doca_gpu_verbs_reset_tracking_and_memory(struct doca_gpu_verbs_qp *
     if (qp_gverbs->cpu_proxy) {
         assert(qp_gverbs->sq_dbrec);
         *qp_gverbs->sq_dbrec = 0;
+        *qp_gverbs->cpu_db = 0;
     } else {
         assert(qp_gverbs->qp_cpu->sq_dbrec);
         cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
