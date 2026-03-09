@@ -83,6 +83,13 @@ make -j
 
 This generates a `lib` directory containing the shared library.
 
+It is also possible to specify CUDA arch at build time, as well as install library and examples in a specific directory.
+An example to build and install library and examples for Hopper GPU with `sm_90` on a given prefix:
+
+```bash
+make install install_examples PREFIX=/path/to/directory CUDA_ARCH=90
+```
+
 ## Enable logs
 
 Logs are managed by macro `DOCA_LOG`, relying on `syslog` with different log levels:
