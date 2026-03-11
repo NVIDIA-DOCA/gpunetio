@@ -314,6 +314,7 @@ doca_error_t create_verbs_resources(struct verbs_config *cfg, struct verbs_resou
     qp_init.nic_handler = resources->nic_handler;
     qp_init.mreg_type = DOCA_GPUNETIO_VERBS_MEM_REG_TYPE_DEFAULT;
     qp_init.send_dbr_mode_ext = resources->send_dbr_mode_ext;
+    qp_init.cq_collapsed = resources->cq_collapsed;
 
     status = doca_gpu_verbs_create_qp_hl(&qp_init, &(resources->qp));
     if (status != DOCA_SUCCESS) {
