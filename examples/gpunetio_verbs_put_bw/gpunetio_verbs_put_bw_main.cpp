@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
     verbs_cfg.cuda_threads = CUDA_THREADS_BW;
     verbs_cfg.nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO;
 
-    while ((option = getopt(argc, argv, "c:d:e:g:i:l:p")) != -1) {
+    while ((option = getopt(argc, argv, "c:d:e:g:i:l:p:")) != -1) {
         switch (option) {
             case 'c': {
                 verbs_cfg.server_ip_addr = optarg;
