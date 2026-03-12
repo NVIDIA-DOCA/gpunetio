@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
     verbs_cfg.cuda_threads = CUDA_THREADS_BW;
     verbs_cfg.nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO;
 
-    while ((option = getopt(argc, argv, "c:d:e:g:i:p:t")) != -1) {
+    while ((option = getopt(argc, argv, "c:d:e:g:i:l:p")) != -1) {
         switch (option) {
             case 'c': {
                 verbs_cfg.server_ip_addr = optarg;
@@ -73,18 +73,36 @@ int main(int argc, char **argv) {
             }
             case 'i': {
                 verbs_cfg.num_iters = std::atoi(optarg);
+                if ((verbs_cfg.num_iters % verbs_cfg.cuda_threads) != 0) {
+                    DOCA_LOG(LOG_ERR, "Iterations must be a multiple of CUDA threads number (%d)",
+                             verbs_cfg.cuda_threads);
+                    return 1;
+                }
+                break;
+            }
+            case 'l': {
+                verbs_cfg.gid_index = std::atoi(optarg);
                 break;
             }
             case 'p': {
                 verbs_cfg.nic_handler = (enum doca_gpu_dev_verbs_nic_handler)std::atoi(optarg);
-                break;
-            }
-            case 't': {
-                verbs_cfg.cuda_threads = std::atoi(optarg);
+                if (verbs_cfg.nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF) {
+                    DOCA_LOG(LOG_ERR, "NIC handler BlueFlame not supported in this example");
+                    return 1;
+                }
                 break;
             }
             default:
-                std::cerr << "Usage: " << argv[0] << " -n name" << std::endl;
+                std::cerr << "Usage: " << argv[0] << "\n"
+                          << " -c <server_ip> (Client only)\n"
+                          << " -d <mlx5_X device name>\n"
+                          << " -e <exec scope. 0: THREAD 1: WARP (default: 0)>\n"
+                          << " -g <GPU PCIe address>\n"
+                          << " -i <number of iterations (default: 2048)>\n"
+                          << " -l <GID Index (default: 0)>\n"
+                          << " -p <NIC handler. 0: AUTO 1: CPU PROXY 2: GPU SM_DB 6: GPU BF "
+                             "(default: 0)>\n"
+                          << std::endl;
                 return 1;
         }
     }

@@ -130,16 +130,14 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
             if (status == DOCA_SUCCESS) {
                 resources->data_mr[idx] = ibv_reg_dmabuf_mr(
                     resources->verbs_pd, 0, size, (uint64_t)resources->data_buf[idx], dmabuf_fd,
-                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ |
-                        IBV_ACCESS_REMOTE_ATOMIC);
+                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_RELAXED_ORDERING);
             }
         }
 
         if (resources->data_mr[idx] == NULL) {
-            resources->data_mr[idx] =
-                ibv_reg_mr(resources->verbs_pd, resources->data_buf[idx], size,
-                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                               IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC);
+            resources->data_mr[idx] = ibv_reg_mr(
+                resources->verbs_pd, resources->data_buf[idx], size,
+                IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_RELAXED_ORDERING);
         }
 
         if (resources->data_mr[idx] == NULL) {
