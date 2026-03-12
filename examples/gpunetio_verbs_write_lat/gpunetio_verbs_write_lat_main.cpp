@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
     verbs_cfg.nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO;
     verbs_cfg.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_VALID_DBR;
 
-    while ((option = getopt(argc, argv, "c:d:g:i:p:r:")) != -1) {
+    while ((option = getopt(argc, argv, "c:d:g:i:l:p:r:")) != -1) {
         switch (option) {
             case 'c': {
                 verbs_cfg.server_ip_addr = optarg;
@@ -71,6 +71,10 @@ int main(int argc, char **argv) {
             }
             case 'i': {
                 verbs_cfg.num_iters = std::atoi(optarg);
+                break;
+            }
+            case 'l': {
+                verbs_cfg.gid_index = std::atoi(optarg);
                 break;
             }
             case 'p': {

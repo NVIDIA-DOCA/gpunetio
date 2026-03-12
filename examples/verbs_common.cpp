@@ -289,7 +289,7 @@ doca_error_t create_verbs_resources(struct verbs_config *cfg, struct verbs_resou
         goto destroy_resources;
     }
 
-    if (port_attr.link_layer == 1) {
+    if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
         status = create_verbs_ah_attr(resources->verbs_context, cfg->gid_index,
                                       DOCA_VERBS_ADDR_TYPE_IB_NO_GRH, resources->gid,
                                       &resources->verbs_ah_attr);
@@ -386,12 +386,18 @@ doca_error_t connect_verbs_qp(struct verbs_resources *resources) {
     }
 
     /* IB only parameter */
-    if (port_attr.link_layer == 1) {
+    if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
         status = doca_verbs_ah_attr_set_dlid(resources->verbs_ah_attr, resources->dlid);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to set dlid");
             return status;
         }
+    }
+
+    status = doca_verbs_ah_attr_set_sl(resources->verbs_ah_attr, 0);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to set sl");
+        return status;
     }
 
     status = doca_verbs_qp_attr_create(&verbs_qp_attr);
