@@ -400,7 +400,7 @@ doca_error_t connect_verbs_qp(struct verbs_resources *resources) {
         return status;
     }
 
-    status = doca_verbs_qp_attr_set_path_mtu(verbs_qp_attr, DOCA_VERBS_MTU_SIZE_1K_BYTES);
+    status = doca_verbs_qp_attr_set_path_mtu(verbs_qp_attr, DOCA_VERBS_MTU_SIZE_4K_BYTES);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to set path MTU: %d", status);
         goto destroy_verbs_qp_attr;
@@ -476,6 +476,12 @@ doca_error_t connect_verbs_qp(struct verbs_resources *resources) {
     status = doca_verbs_qp_attr_set_ah_attr(verbs_qp_attr, resources->verbs_ah_attr);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to set address handle: %d", status);
+        goto destroy_verbs_qp_attr;
+    }
+
+    status = doca_verbs_qp_attr_set_pkey_index(verbs_qp_attr, 0);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to set PKey index: %d", status);
         goto destroy_verbs_qp_attr;
     }
 
