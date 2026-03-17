@@ -45,6 +45,7 @@ int main(int argc, char **argv) {
     verbs_cfg.num_iters = NUM_ITERS;
     verbs_cfg.cuda_threads = CUDA_THREADS_BW;
     verbs_cfg.nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO;
+    verbs_cfg.exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD;
 
     while ((option = getopt(argc, argv, "c:d:e:g:i:l:p:")) != -1) {
         switch (option) {
