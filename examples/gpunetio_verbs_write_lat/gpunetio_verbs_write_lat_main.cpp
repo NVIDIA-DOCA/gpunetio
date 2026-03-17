@@ -52,8 +52,9 @@ int main(int argc, char **argv) {
     /* Only 1 Thread is needed for the latency test */
     verbs_cfg.cuda_threads = CUDA_THREADS_LAT;
     verbs_cfg.nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO;
+    verbs_cfg.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_VALID_DBR;
 
-    while ((option = getopt(argc, argv, "c:d:g:i:p:")) != -1) {
+    while ((option = getopt(argc, argv, "c:d:g:i:l:p:r:")) != -1) {
         switch (option) {
             case 'c': {
                 verbs_cfg.server_ip_addr = optarg;
@@ -72,12 +73,31 @@ int main(int argc, char **argv) {
                 verbs_cfg.num_iters = std::atoi(optarg);
                 break;
             }
+            case 'l': {
+                verbs_cfg.gid_index = std::atoi(optarg);
+                break;
+            }
             case 'p': {
                 verbs_cfg.nic_handler = (enum doca_gpu_dev_verbs_nic_handler)std::atoi(optarg);
                 break;
             }
+            case 'r': {
+                verbs_cfg.send_dbr_mode_ext =
+                    (enum doca_gpu_verbs_send_dbr_mode_ext)std::atoi(optarg);
+                break;
+            }
             default:
-                std::cerr << "Usage: " << argv[0] << " -n name" << std::endl;
+                std::cerr << "Usage: " << argv[0] << "\n"
+                          << " -c <server_ip> (Client only)\n"
+                          << " -d <mlx5_X device name>\n"
+                          << " -g <GPU PCIe address>\n"
+                          << " -i <number of iterations (default: 2048)>\n"
+                          << " -l <GID Index (default: 0)>\n"
+                          << " -p <NIC handler. 0: AUTO 1: CPU PROXY 2: GPU SM_DB 6: GPU BF "
+                             "(default: 0)>\n"
+                          << " -r <DBREC mode external (Reliable DBREC feature) (default: 0, "
+                             "ConnectX-8 only)>\n"
+                          << std::endl;
                 return 1;
         }
     }

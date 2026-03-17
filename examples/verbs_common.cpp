@@ -237,10 +237,23 @@ doca_error_t create_verbs_resources(struct verbs_config *cfg, struct verbs_resou
     int ret = 0;
     struct ibv_port_attr port_attr;
     struct doca_gpu_verbs_qp_init_attr_hl qp_init;
+    int cuda_id = 0;
+    cudaError_t cuda_ret;
+
     resources->cfg = cfg;
 
     cudaFree(0);
-    cudaSetDevice(0);
+
+    /* In a multi-GPU system, ensure CUDA refers to the right GPU device */
+    cuda_ret = cudaDeviceGetByPCIBusId(&cuda_id, cfg->gpu_pcie_addr.c_str());
+    if (cuda_ret != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Invalid GPU bus id provided %s", cfg->gpu_pcie_addr.c_str());
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    cudaSetDevice(cuda_id);
+
+    DOCA_LOG(LOG_INFO, "Setting GPU device %d at %s", cuda_id, cfg->gpu_pcie_addr.c_str());
 
     status = doca_gpu_create(cfg->gpu_pcie_addr.c_str(), &resources->gpu_dev);
     if (status != DOCA_SUCCESS) {
@@ -276,7 +289,7 @@ doca_error_t create_verbs_resources(struct verbs_config *cfg, struct verbs_resou
         goto destroy_resources;
     }
 
-    if (port_attr.link_layer == 1) {
+    if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
         status = create_verbs_ah_attr(resources->verbs_context, cfg->gid_index,
                                       DOCA_VERBS_ADDR_TYPE_IB_NO_GRH, resources->gid,
                                       &resources->verbs_ah_attr);
@@ -300,6 +313,8 @@ doca_error_t create_verbs_resources(struct verbs_config *cfg, struct verbs_resou
     qp_init.sq_nwqe = VERBS_TEST_QUEUE_SIZE;
     qp_init.nic_handler = resources->nic_handler;
     qp_init.mreg_type = DOCA_GPUNETIO_VERBS_MEM_REG_TYPE_DEFAULT;
+    qp_init.send_dbr_mode_ext = resources->send_dbr_mode_ext;
+    qp_init.cq_collapsed = resources->cq_collapsed;
 
     status = doca_gpu_verbs_create_qp_hl(&qp_init, &(resources->qp));
     if (status != DOCA_SUCCESS) {
@@ -371,12 +386,18 @@ doca_error_t connect_verbs_qp(struct verbs_resources *resources) {
     }
 
     /* IB only parameter */
-    if (port_attr.link_layer == 1) {
+    if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
         status = doca_verbs_ah_attr_set_dlid(resources->verbs_ah_attr, resources->dlid);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to set dlid");
             return status;
         }
+    }
+
+    status = doca_verbs_ah_attr_set_sl(resources->verbs_ah_attr, 0);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to set sl");
+        return status;
     }
 
     status = doca_verbs_qp_attr_create(&verbs_qp_attr);
@@ -385,7 +406,7 @@ doca_error_t connect_verbs_qp(struct verbs_resources *resources) {
         return status;
     }
 
-    status = doca_verbs_qp_attr_set_path_mtu(verbs_qp_attr, DOCA_VERBS_MTU_SIZE_1K_BYTES);
+    status = doca_verbs_qp_attr_set_path_mtu(verbs_qp_attr, DOCA_VERBS_MTU_SIZE_4K_BYTES);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to set path MTU: %d", status);
         goto destroy_verbs_qp_attr;
@@ -464,6 +485,12 @@ doca_error_t connect_verbs_qp(struct verbs_resources *resources) {
         goto destroy_verbs_qp_attr;
     }
 
+    status = doca_verbs_qp_attr_set_pkey_index(verbs_qp_attr, 0);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to set PKey index: %d", status);
+        goto destroy_verbs_qp_attr;
+    }
+
     status = doca_verbs_qp_attr_set_dest_qp_num(verbs_qp_attr, resources->remote_qp_number);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to set destination QP number: %d", status);
@@ -537,7 +564,7 @@ void *progress_cpu_proxy(void *args_) {
            *((volatile uint64_t *)args->exit_flag));
 
     while (*((volatile uint64_t *)args->exit_flag) == 0) {
-        doca_gpu_verbs_cpu_proxy_progress(args->qp_cpu);
+        doca_gpu_verbs_cpu_proxy_progress(args->qp_cpu, NULL);
     }
 
     return NULL;

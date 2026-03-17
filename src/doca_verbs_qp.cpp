@@ -37,6 +37,7 @@
 #include <time.h>
 #include <string.h>
 
+#include "host/doca_verbs.h"
 #include "host/mlx5_prm.h"
 #include "host/mlx5_ifc.h"
 
@@ -143,13 +144,13 @@ int init2init_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
 int init2rtr_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
     /* [DOCA_VERBS_QP_TYPE_RC] */
     QP_ATTR(CURRENT_STATE) | QP_ATTR(NEXT_STATE) | QP_ATTR(PKEY_INDEX) |
-        QP_ATTR(ALLOW_REMOTE_WRITE) | QP_ATTR(ALLOW_REMOTE_READ),
+        QP_ATTR(ALLOW_REMOTE_WRITE) | QP_ATTR(ALLOW_REMOTE_READ) | QP_ATTR(MAX_DEST_RD_ATOMIC),
 };
 
 int rtr2rts_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
     /* [DOCA_VERBS_QP_TYPE_RC] */
     QP_ATTR(CURRENT_STATE) | QP_ATTR(NEXT_STATE) | QP_ATTR(MIN_RNR_TIMER) |
-        QP_ATTR(ALLOW_REMOTE_WRITE),
+        QP_ATTR(ALLOW_REMOTE_WRITE) | QP_ATTR(MAX_QP_RD_ATOMIC),
 };
 
 int rts2rts_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
@@ -190,6 +191,10 @@ const char *qp_attr_to_string(int attr) {
             return "RNR_RETRY";
         case DOCA_VERBS_QP_ATTR_AH_ATTR:
             return "AH_ATTR";
+        case DOCA_VERBS_QP_ATTR_MAX_QP_RD_ATOMIC:
+            return "MAX_QP_RD_ATOMIC";
+        case DOCA_VERBS_QP_ATTR_MAX_DEST_RD_ATOMIC:
+            return "MAX_DEST_RD_ATOMIC";
         default:
             break;
     }
@@ -206,6 +211,8 @@ void print_if_missing_attr(int required_attr_mask, int attr_mask, int attr_to_ch
 void print_missing_attrs(int required_attr_mask, int attr_mask) {
     print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE);
     print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ);
+    print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_MAX_QP_RD_ATOMIC);
+    print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_MAX_DEST_RD_ATOMIC);
     print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_PKEY_INDEX);
     print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER);
     print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_PORT_NUM);
@@ -663,6 +670,8 @@ doca_error_t doca_verbs_qp::create_qp_obj(
 
     void *qpc = MLX5_ADDR_OF(create_qp_in, create_in, qpc);
 
+    const bool use_rq = ((m_rq_size > 0) || (verbs_qp_init_attr.srq != nullptr));
+
     DEVX_SET(create_qp_in, create_in, opcode, MLX5_CMD_OP_CREATE_QP);
     DEVX_SET(qpc, qpc, st, MLX5_QPC_ST_RC);
 
@@ -695,7 +704,7 @@ doca_error_t doca_verbs_qp::create_qp_obj(
         DEVX_SET(qpc, qpc, no_sq, 1);
     }
 
-    if ((m_rq_size > 0) || (verbs_qp_init_attr.srq != nullptr)) {
+    if (use_rq) {
         if (verbs_qp_init_attr.receive_cq == nullptr) {
             DOCA_LOG(LOG_ERR, "Failed to create QP. Receive CQ is null");
             return DOCA_ERROR_INVALID_VALUE;
@@ -722,9 +731,11 @@ doca_error_t doca_verbs_qp::create_qp_obj(
     // DEVX_SET(qpc, qpc, cs_req, 0);            // Disable CS Request
     // DEVX_SET(qpc, qpc, cs_res, 0);            // Disable CS Response
 
+    DEVX_SET(qpc, qpc, send_dbr_mode, verbs_qp_init_attr.send_dbr_mode);
     DEVX_SET(qpc, qpc, dbr_umem_valid, 1);
     DEVX_SET(qpc, qpc, dbr_umem_id, dbr_umem_id);
     DEVX_SET64(qpc, qpc, dbr_addr, dbr_umem_offset);
+
     DEVX_SET64(qpc, qpc, cd_master, verbs_qp_init_attr.core_direct_master);
     DEVX_SET(create_qp_in, create_in, wq_umem_id, wq_umem_id);
     DEVX_SET(create_qp_in, create_in, wq_umem_valid, 1);
@@ -948,6 +959,9 @@ doca_error_t doca_verbs_qp::init2rtr(struct doca_verbs_qp_attr &verbs_qp_attr,
         DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr.allow_remote_atomic);
     }
 
+    if (attr_mask & DOCA_VERBS_QP_ATTR_MAX_DEST_RD_ATOMIC)
+        DEVX_SET(qpc, qpc, log_rra_max, doca_internal_utils_log2(verbs_qp_attr.max_dest_rd_atomic));
+
     int mlx5_opt_param_mask{0};
     convert_doca_verbs_qp_attr_mask_to_legal_mlx5_qp_opt_param_mask(attr_mask, mlx5_opt_param_mask,
                                                                     DOCA_VERBS_QP_INIT2RTR);
@@ -998,6 +1012,9 @@ doca_error_t doca_verbs_qp::rtr2rts(struct doca_verbs_qp_attr &verbs_qp_attr,
         DEVX_SET(qpc, qpc, rae, 1);
         DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr.allow_remote_atomic);
     }
+
+    if (attr_mask & DOCA_VERBS_QP_ATTR_MAX_QP_RD_ATOMIC)
+        DEVX_SET(qpc, qpc, log_sra_max, doca_internal_utils_log2(verbs_qp_attr.max_rd_atomic));
 
     DEVX_SET(qpc, qpc, log_ack_req_freq, 0x0);  // 8
 
@@ -1193,6 +1210,8 @@ doca_error_t doca_verbs_qp::query_qp(struct doca_verbs_qp_attr &verbs_qp_attr,
     verbs_qp_attr.allow_remote_write = DEVX_GET(qpc, qpc, rwe);
     verbs_qp_attr.allow_remote_read = DEVX_GET(qpc, qpc, rre);
     // verbs_qp_attr.allow_remote_atomic = DEVX_GET(qpc, qpc, rae);
+    verbs_qp_attr.max_rd_atomic = 1 << DEVX_GET(qpc, qpc, log_sra_max);
+    verbs_qp_attr.max_dest_rd_atomic = 1 << DEVX_GET(qpc, qpc, log_rra_max);
 
     if (verbs_qp_attr.ah_attr != nullptr) {
         verbs_qp_attr.ah_attr->addr_type = m_addr_type;
@@ -1224,6 +1243,8 @@ doca_error_t doca_verbs_qp::query_qp(struct doca_verbs_qp_attr &verbs_qp_attr,
     verbs_qp_init_attr.external_umem = m_init_attr.external_umem;
     verbs_qp_init_attr.external_umem_offset = m_init_attr.external_umem_offset;
     verbs_qp_init_attr.external_uar = m_init_attr.external_uar;
+    verbs_qp_init_attr.core_direct_master = m_init_attr.core_direct_master;
+    verbs_qp_init_attr.send_dbr_mode = m_init_attr.send_dbr_mode;
 
     return DOCA_SUCCESS;
 }
@@ -1248,6 +1269,18 @@ void doca_verbs_qp::create(struct ibv_context *ibv_ctx) {
 
     if (m_init_attr.qp_type != DOCA_VERBS_QP_TYPE_RC) {
         DOCA_LOG(LOG_ERR, "QP type is not valid");
+        throw DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if ((m_init_attr.send_dbr_mode == DOCA_VERBS_QP_SEND_DBR_MODE_NO_DBR_EXT) &&
+        (m_verbs_device_attr->m_send_dbr_mode_no_dbr_ext == 0)) {
+        DOCA_LOG(LOG_ERR, "No DBR-ext support is not supported by the device");
+        throw DOCA_ERROR_NOT_SUPPORTED;
+    }
+
+    if (m_init_attr.emulate_no_dbr_ext &&
+        m_init_attr.send_dbr_mode == DOCA_VERBS_QP_SEND_DBR_MODE_NO_DBR_EXT) {
+        DOCA_LOG(LOG_ERR, "emulate_no_dbr_ext and send_dbr_mode NO_DBR_EXT are not compatible");
         throw DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -1389,7 +1422,11 @@ void doca_verbs_qp::create(struct ibv_context *ibv_ctx) {
         }
 
         void *reg_addr{};
-        status = doca_verbs_uar_reg_addr_get(m_init_attr.external_uar, &reg_addr);
+        if (m_init_attr.send_dbr_mode == DOCA_VERBS_QP_SEND_DBR_MODE_DBR_VALID) {
+            status = doca_verbs_uar_reg_addr_get(m_init_attr.external_uar, &reg_addr);
+        } else {
+            status = doca_verbs_uar_dbr_less_addr_get(m_init_attr.external_uar, &reg_addr);
+        }
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to get external UAR reg_addr");
             throw status;
@@ -1558,6 +1595,14 @@ uint32_t doca_verbs_qp::get_sq_size_wqebb() const noexcept { return m_sq_size_wq
 uint32_t doca_verbs_qp::get_rq_size() const noexcept { return m_rq_size; }
 
 uint32_t doca_verbs_qp::get_rcv_wqe_size() const noexcept { return m_rcv_wqe_size; }
+
+enum doca_verbs_qp_send_dbr_mode doca_verbs_qp::get_send_dbr_mode() const noexcept {
+    return static_cast<enum doca_verbs_qp_send_dbr_mode>(m_init_attr.send_dbr_mode);
+}
+
+bool doca_verbs_qp::get_emulate_no_dbr_ext() const noexcept {
+    return m_init_attr.emulate_no_dbr_ext;
+}
 
 /**********************************************************************************************************************
  * Public API functions
@@ -1996,6 +2041,50 @@ uint8_t doca_verbs_qp_init_attr_get_core_direct_master(
     return verbs_qp_init_attr->core_direct_master;
 }
 
+doca_error_t doca_verbs_qp_init_attr_set_send_dbr_mode(
+    struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
+    enum doca_verbs_qp_send_dbr_mode send_dbr_mode) {
+    if (verbs_qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set send_dbr_mode: parameter verbs_qp_init_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    verbs_qp_init_attr->send_dbr_mode = static_cast<uint8_t>(send_dbr_mode);
+    return DOCA_SUCCESS;
+}
+
+enum doca_verbs_qp_send_dbr_mode doca_verbs_qp_init_attr_get_send_dbr_mode(
+    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
+    if (verbs_qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get send_dbr_mode: parameter verbs_qp_init_attr is NULL");
+        return DOCA_VERBS_QP_SEND_DBR_MODE_DBR_VALID;
+    }
+
+    return static_cast<enum doca_verbs_qp_send_dbr_mode>(verbs_qp_init_attr->send_dbr_mode);
+}
+
+doca_error_t doca_verbs_qp_init_attr_set_emulate_no_dbr_ext(
+    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, bool emulate_no_dbr_ext) {
+    if (verbs_qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set emulate_no_dbr_ext: parameter verbs_qp_init_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    verbs_qp_init_attr->emulate_no_dbr_ext = emulate_no_dbr_ext;
+
+    return DOCA_SUCCESS;
+}
+
+bool doca_verbs_qp_init_attr_get_emulate_no_dbr_ext(
+    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
+    if (verbs_qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get emulate_no_dbr_ext: parameter verbs_qp_init_attr is NULL");
+        return false;
+    }
+
+    return verbs_qp_init_attr->emulate_no_dbr_ext;
+}
+
 doca_error_t doca_verbs_qp_attr_create(struct doca_verbs_qp_attr **verbs_qp_attr) {
     if (verbs_qp_attr == nullptr) {
         DOCA_LOG(LOG_ERR, "Failed to create qp_attr: parameter verbs_qp_attr is NULL");
@@ -2372,6 +2461,42 @@ uint16_t doca_verbs_qp_attr_get_min_rnr_timer(const struct doca_verbs_qp_attr *v
     return verbs_qp_attr->min_rnr_timer;
 }
 
+doca_error_t doca_verbs_qp_attr_set_max_rd_atomic(struct doca_verbs_qp_attr *verbs_qp_attr,
+                                                  uint8_t max_rd_atomic) {
+    if (verbs_qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set max_rd_atomic: parameter verbs_qp_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (!doca_internal_utils_next_power_of_two(max_rd_atomic)) {
+        DOCA_LOG(LOG_ERR, "Failed to set max_rd_atomic (%d) as it is not a power of 2",
+                 max_rd_atomic);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    verbs_qp_attr->max_rd_atomic = max_rd_atomic;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_qp_attr_set_max_dest_rd_atomic(struct doca_verbs_qp_attr *verbs_qp_attr,
+                                                       uint8_t max_dest_rd_atomic) {
+    if (verbs_qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set max_dest_rd_atomic: parameter verbs_qp_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (!doca_internal_utils_next_power_of_two(max_dest_rd_atomic)) {
+        DOCA_LOG(LOG_ERR, "Failed to set max_dest_rd_atomic (%d) as it is not a power of 2",
+                 max_dest_rd_atomic);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    verbs_qp_attr->max_dest_rd_atomic = max_dest_rd_atomic;
+
+    return DOCA_SUCCESS;
+}
+
 doca_error_t doca_verbs_ah_attr_create(struct ibv_context *context,
                                        struct doca_verbs_ah_attr **verbs_ah) {
     if (context == nullptr) {
@@ -2741,4 +2866,13 @@ struct doca_verbs_srq *doca_verbs_qp_init_attr_get_srq(
     }
 
     return verbs_qp_init_attr->srq;
+}
+
+enum doca_verbs_qp_send_dbr_mode doca_verbs_qp_get_send_dbr_mode(
+    const struct doca_verbs_qp *verbs_qp) {
+    return verbs_qp->get_send_dbr_mode();
+}
+
+bool doca_verbs_qp_get_emulate_no_dbr_ext(const struct doca_verbs_qp *verbs_qp) {
+    return verbs_qp->get_emulate_no_dbr_ext();
 }

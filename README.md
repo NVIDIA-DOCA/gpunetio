@@ -12,8 +12,8 @@ The table below highlights the key differences between this DOCA GPUNetIO open-s
 
 | Item | DOCA Full SDK | DOCA Open Source |
 | ---- | ------------- | ---------------- |
-| Verbs CPU control path | Close-source shared library | Open-source C++ files |
-| GPUNetIO CPU control path | Close-source shared library | Open-source C++ files |
+| Verbs CPU control path | Closed-source shared library | Open-source C++ files |
+| GPUNetIO CPU control path | Closed-source shared library | Open-source C++ files |
 | GPUNetIO GPU data path for RDMA Verbs one-sided | Yes | Yes |
 | GPUNetIO GPU data path for RDMA Verbs two-sided | Yes | No |
 | GPUNetIO GPU data path for Ethernet | Yes | No |
@@ -24,7 +24,7 @@ It is important to note, however, that the CUDA header files for the GPUNetIO Ve
 
 ## Goals
 
-The overarching goal of DOCA GPUNetIO (both Open Source and Full) is to consolidate multiple GDAKI implementations into a unified driver and library with consistent host- and device-side interfaces. This common foundation can be shared across current and future consumers of GDAKI technology such as [NVSHMEM](https://docs.nvidia.com/nvshmem/api/using.html#using-the-nvshmem-infiniband-gpudirect-async-transport), [NCCL](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage.html), and GPUDirect.
+The overarching goal of DOCA GPUNetIO (both Open Source and Full) is to consolidate multiple GDAKI implementations into a unified driver and library with consistent host- and device-side interfaces. This common foundation can be shared across current and future consumers of GDAKI technology such as [NVSHMEM](https://docs.nvidia.com/nvshmem/api/using.html#using-the-nvshmem-infiniband-gpudirect-async-transport), [NCCL](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage.html) or [UCX](https://github.com/openucx/ucx).
 This approach promotes knowledge sharing while reducing the engineering effort required for long-term maintenance.
 
 
@@ -81,7 +81,14 @@ cd doca-gpunetio
 make -j
 ```
 
-This generates a `lib` directory containing the shared library.
+The output is a `lib` directory containing the shared library.
+
+It is also possible to specify CUDA arch at build time, as well as install library and examples in a specific directory.
+An example to build and install library and examples for Hopper GPU with `sm_90` on a given prefix:
+
+```bash
+make install install_examples PREFIX=/path/to/directory/install CUDA_ARCH=90
+```
 
 ## Enable logs
 
@@ -116,12 +123,6 @@ The following command lines assume samples are running on systems where GPU is a
 This example is a GDAKI perftest `ib_write_bw`-like benchmark where client launches a CUDA kernel to execute the high-level `doca_gpu_dev_verbs_put` operation.
 Server doesn't launch any CUDA kernel: upon user typing ctrl+c, server validate data received from client.
 
-**Build:**
-```bash
-cd doca-gpunetio/examples/gpunetio_verbs_put_bw
-make -j
-```
-
 **Run (server):**
 ```bash
 LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=6 ./gpunetio_verbs_put_bw -g 8A:00.0 -d mlx5_0
@@ -135,33 +136,29 @@ LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=
 Modes:
 - **CUDA Thread execution scope** (default).
 - **CUDA Warp execution scope**: add `-e 1`.
-- **CPU proxy mode**: add `-p 1`.
+- **NIC handler type**: add `-p <nic_handler value>` where 0: AUTO (default), 1: CPU Proxy, 2: GPU SM DB.
 
 Validation success message (server):
 ```
 Validation successful! Data received correctly from client.
 ```
 
-
 ### Example 2: `gpunetio_verbs_write_lat`
 
 This example is a GDAKI perftest `ib_write_lat`-like benchmark where Client and server both launch CUDA kernels using low-level APIs.
 
-**Build:**
-```bash
-cd doca-gpunetio/examples/gpunetio_verbs_write_lat
-make -j
-```
-
 **Run (server):**
 ```bash
-LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=6 ./gpunetio_verbs_write_lat -g 8A:00.0 -d mlx5_0
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=6 ./gpunetio_verbs_write_lat -g 8A:00.0 -d mlx5_0 -p 2
 ```
 
 **Run (client):**
 ```bash
-LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=6 ./gpunetio_verbs_write_lat -g 8A:00.0 -d mlx5_0 -c <server_ip_address>
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=6 ./gpunetio_verbs_write_lat -g 8A:00.0 -d mlx5_0 -p 2 -c <server_ip_address>
 ```
+
+Modes:
+- **NIC handler type**: add `-p <nic_handler value>` where 0: AUTO (default), 1: CPU Proxy, 2: GPU SM DB, 6: GPU SM BlueFlame.
 
 
 ## Acknowledgments
