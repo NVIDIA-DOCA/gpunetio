@@ -109,6 +109,7 @@ LIB_CXXFLAGS := $(CXXFLAGS) -Wall
 
 EXAMPLES_SUBDIRS := examples/gpunetio_verbs_put_bw
 EXAMPLES_SUBDIRS += examples/gpunetio_verbs_write_lat
+EXAMPLES_SUBDIRS += examples/gpunetio_verbs_write_bw
 
 all: lib examples
 
@@ -156,6 +157,7 @@ install_examples: examples
 	mkdir -p $(EXAMPLES_INSTALL_DIR)
 	install -m 755 examples/gpunetio_verbs_put_bw/gpunetio_verbs_put_bw $(EXAMPLES_INSTALL_DIR)
 	install -m 755 examples/gpunetio_verbs_write_lat/gpunetio_verbs_write_lat $(EXAMPLES_INSTALL_DIR)
+	install -m 755 examples/gpunetio_verbs_write_bw/gpunetio_verbs_write_bw $(EXAMPLES_INSTALL_DIR)
 
 $(DOC_LATEX_PACKAGE): $(INCLUDES) $(DOXYFILE)
 	@ mkdir -p $(BLD_DIR)

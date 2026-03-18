@@ -160,6 +160,29 @@ LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=
 Modes:
 - **NIC handler type**: add `-p <nic_handler value>` where 0: AUTO (default), 1: CPU Proxy, 2: GPU SM DB, 6: GPU SM BlueFlame.
 
+### Example 3: `gpunetio_verbs_write_bw`
+
+This example is a GDAKI perftest `ib_write_bw`-like benchmark where Client and server both launch CUDA kernels using low-level APIs.
+
+**Run (server):**
+```bash
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=6 ./gpunetio_verbs_write_bw -g 8A:00.0 -d mlx5_0
+```
+
+**Run (client):**
+```bash
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=6 ./gpunetio_verbs_write_bw -g 8A:00.0 -d mlx5_0 -c <server_ip_address>
+```
+
+Modes:
+- **NIC handler type**: add `-p <nic_handler value>` where 0: AUTO (default), 1: CPU Proxy, 2: GPU SM DB.
+
+GPU SM BlueFlame is not supported in this example.
+
+Validation success message (server):
+```
+Validation successful! Data received correctly from client.
+```
 
 ## Acknowledgments
 

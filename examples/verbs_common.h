@@ -250,6 +250,46 @@ size_t get_page_size(void);
 extern "C" {
 #endif
 
+/*
+ * Launch a CUDA kernel with to measure RDMA Write bandwidth
+ *
+ * @stream [in]: CUDA Stream to launch the kernel
+ * @qp [in]: Verbs GPU object
+ * @num_iters [in]: Total number of iterations
+ * @cuda_blocks [in]: Number of CUDA blocks to launch the kernel
+ * @cuda_threads [in]: Number of CUDA threads to launch the kernel
+ * @data_size [in]: Data buffer size (number of bytes)
+ * @src_buf [in]: Source GPU data buffer address
+ * @src_buf_mkey [in]: Source GPU data buffer memory key
+ * @dst_buf [in]: Destination GPU data buffer address
+ * @dst_buf_mkey [in]: Destination GPU data buffer memory key
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+doca_error_t gpunetio_verbs_write_bw(cudaStream_t stream, struct doca_gpu_dev_verbs_qp *qp,
+                                     uint32_t num_iters, uint32_t cuda_blocks,
+                                     uint32_t cuda_threads, uint32_t data_size, uint8_t *src_buf,
+                                     uint32_t src_buf_mkey, uint8_t *dst_buf,
+                                     uint32_t dst_buf_mkey);
+
+/*
+ * Launch a CUDA kernel with to measure RDMA Write latency
+ *
+ * @stream [in]: CUDA Stream to launch the kernel
+ * @qp [in]: Verbs GPU object
+ * @num_iters [in]: Total number of iterations
+ * @cuda_blocks [in]: Number of CUDA blocks to launch the kernel
+ * @cuda_threads [in]: Number of CUDA threads to launch the kernel
+ * @data_size [in]: Data buffer size (number of bytes)
+ * @local_poll_buf [in]: Flag address to poll waiting for remote peer notification
+ * @local_poll_mkey [in]: Flag mkey to poll waiting for remote peer notification
+ * @local_post_buf [in]: Flag address to post notification to remote peer
+ * @local_post_mkey [in]: Flag mkey to post notification to remote peer
+ * @dst_buf [in]: Destination GPU data buffer address
+ * @dst_buf_mkey [in]: Destination GPU data buffer memory key
+ * @nic_handler [in]: Type of NIC handler
+ * @is_client [in]: This kernel should act like the client (true) or server (false)
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
 doca_error_t gpunetio_verbs_write_lat(
     cudaStream_t stream, struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, uint32_t cuda_blocks,
     uint32_t cuda_threads, uint32_t size, uint8_t *local_poll_buf, uint32_t local_poll_mkey,
