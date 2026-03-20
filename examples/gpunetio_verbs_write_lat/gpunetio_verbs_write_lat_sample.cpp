@@ -39,12 +39,12 @@
     " %-7lu 		%-7d          %-7.2f       		%-7.2f    	 	%-7.2f"
 
 cudaStream_t cstream;
-int message_size[NUM_MSG_SIZE] = {1, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384};
+int message_size[NUM_MSG_SIZE_LAT] = {1, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384};
 
 static doca_error_t destroy_local_memory_objects(struct verbs_resources *resources) {
     int ret = 0;
 
-    for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
+    for (int idx = 0; idx < NUM_MSG_SIZE_LAT; idx++) {
         if (resources->local_poll_mr[idx]) {
             ret = ibv_dereg_mr(resources->local_poll_mr[idx]);
             if (ret != 0) {
@@ -77,7 +77,7 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
     size_t size_data;
     int dmabuf_fd;
 
-    for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
+    for (int idx = 0; idx < NUM_MSG_SIZE_LAT; idx++) {
         resources->data_mr[idx] = NULL;
         size_data = (size_t)(resources->cuda_threads * message_size[idx]);
         ALIGN_SIZE(size_data, host_page_size);
@@ -98,16 +98,16 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
         status = doca_gpu_dmabuf_fd(resources->gpu_dev, resources->local_poll_buf[idx], size_data,
                                     &dmabuf_fd);
         if (status == DOCA_SUCCESS) {
-            resources->local_poll_mr[idx] =
-                ibv_reg_dmabuf_mr(resources->verbs_pd, 0, size_data,
-                                  (uint64_t)resources->local_poll_buf[idx], dmabuf_fd,
-                                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_RELAXED_ORDERING);
+            resources->local_poll_mr[idx] = ibv_reg_dmabuf_mr(
+                resources->verbs_pd, 0, size_data, (uint64_t)resources->local_poll_buf[idx],
+                dmabuf_fd,
+                IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_RELAXED_ORDERING);
         }
 
         if (resources->local_poll_mr[idx] == NULL) {
-            resources->local_poll_mr[idx] =
-                ibv_reg_mr(resources->verbs_pd, resources->local_poll_buf[idx], size_data,
-                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_RELAXED_ORDERING);
+            resources->local_poll_mr[idx] = ibv_reg_mr(
+                resources->verbs_pd, resources->local_poll_buf[idx], size_data,
+                IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_RELAXED_ORDERING);
             if (resources->local_poll_mr[idx] == NULL) {
                 DOCA_LOG(LOG_ERR, "Failed to create data mr: %d", status);
                 goto exit_error;
@@ -130,10 +130,9 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
         status = doca_gpu_dmabuf_fd(resources->gpu_dev, resources->local_post_buf[idx], size_data,
                                     &dmabuf_fd);
         if (status == DOCA_SUCCESS) {
-            resources->local_post_mr[idx] =
-                ibv_reg_dmabuf_mr(resources->verbs_pd, 0, size_data,
-                                  (uint64_t)resources->local_post_buf[idx], dmabuf_fd,
-                                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_RELAXED_ORDERING);
+            resources->local_post_mr[idx] = ibv_reg_dmabuf_mr(
+                resources->verbs_pd, 0, size_data, (uint64_t)resources->local_post_buf[idx],
+                dmabuf_fd, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_RELAXED_ORDERING);
         }
 
         if (resources->local_post_mr[idx] == NULL) {
@@ -157,7 +156,7 @@ exit_error:
 static doca_error_t exchange_params_with_remote_peer(struct verbs_resources *resources) {
     if (resources->cfg->is_server) {
         // Server sends local info
-        for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
+        for (int idx = 0; idx < NUM_MSG_SIZE_LAT; idx++) {
             uint64_t local_addr = (uint64_t)resources->local_poll_buf[idx];
             if (send(resources->conn_socket, &local_addr, sizeof(uint64_t), 0) < 0) {
                 DOCA_LOG(LOG_ERR, "Failed to send local buffer address");
@@ -171,7 +170,7 @@ static doca_error_t exchange_params_with_remote_peer(struct verbs_resources *res
             }
         }
 
-        for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
+        for (int idx = 0; idx < NUM_MSG_SIZE_LAT; idx++) {
             if (recv(resources->conn_socket, &resources->remote_data_buf[idx], sizeof(uint64_t),
                      0) < 0) {
                 DOCA_LOG(LOG_ERR, "Failed to receive remote buffer address ");
@@ -187,7 +186,7 @@ static doca_error_t exchange_params_with_remote_peer(struct verbs_resources *res
 
     } else {
         // Client waits for server info
-        for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
+        for (int idx = 0; idx < NUM_MSG_SIZE_LAT; idx++) {
             if (recv(resources->conn_socket, &resources->remote_data_buf[idx], sizeof(uint64_t),
                      0) < 0) {
                 DOCA_LOG(LOG_ERR, "Failed to receive remote buffer address ");
@@ -201,7 +200,7 @@ static doca_error_t exchange_params_with_remote_peer(struct verbs_resources *res
             }
         }
 
-        for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
+        for (int idx = 0; idx < NUM_MSG_SIZE_LAT; idx++) {
             uint64_t local_addr = (uint64_t)resources->local_poll_buf[idx];
             if (send(resources->conn_socket, &local_addr, sizeof(uint64_t), 0) < 0) {
                 DOCA_LOG(LOG_ERR, "Failed to send local buffer address");
@@ -355,7 +354,7 @@ doca_error_t verbs_server(struct verbs_config *cfg) {
         goto stop_thread;
     }
 
-    for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
+    for (int idx = 0; idx < NUM_MSG_SIZE_LAT; idx++) {
         /* Warmup per size*/
         status = gpunetio_verbs_write_lat(
             cstream, qp_gpu, resources.num_iters, NUM_QP, resources.cuda_threads, message_size[idx],
@@ -545,7 +544,7 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
         goto stop_thread;
     }
 
-    for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
+    for (int idx = 0; idx < NUM_MSG_SIZE_LAT; idx++) {
         /* Warmup per size*/
         status = gpunetio_verbs_write_lat(
             cstream, qp_gpu, resources.num_iters, NUM_QP, resources.cuda_threads, message_size[idx],

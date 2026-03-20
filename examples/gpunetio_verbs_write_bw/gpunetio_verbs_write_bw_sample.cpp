@@ -32,11 +32,12 @@
 #define RESULT_LINE \
     "------------------------------------------------------------------------------------\n"
 #define RESULT_FMT_G \
-    " #bytes     #iterations    BW average[MB/sec]   MsgRate[Mpps]    CUDA Kernel[ms]"
+    " #bytes     #iterations    BW average[Gbps]   MsgRate[Mpps]    CUDA Kernel[ms]"
 #define REPORT_FMT_EXT " %-7u    	%-7u           %-7.6lf            %-7.6lf            %-7.6f"
 
 cudaStream_t cstream = NULL;
-int message_size[NUM_MSG_SIZE] = {1, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384};
+int message_size[NUM_MSG_SIZE] = {1,    64,    128,   256,   512,    1024,   2048,   4096,
+                                  8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576};
 volatile bool server_force_quit = false;
 
 /*
@@ -139,7 +140,8 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
                                         &dmabuf_fd);
             if (status == DOCA_SUCCESS) {
                 resources->data_mr[idx] = ibv_reg_dmabuf_mr(
-                    resources->verbs_pd, 0, size_data, (uint64_t)resources->data_buf[idx], dmabuf_fd,
+                    resources->verbs_pd, 0, size_data, (uint64_t)resources->data_buf[idx],
+                    dmabuf_fd,
                     IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_RELAXED_ORDERING);
             }
 
@@ -300,8 +302,6 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
     CUresult cu_result;
     CUevent e_start = NULL, e_end = NULL;
     float et_ms = 0.0f;
-    const unsigned long format_factor = 0x100000;  // -> MBS
-    // 125000000;
     const unsigned long num_messages = cfg->num_iters * NUM_QP;
     pthread_t thread_id;
     struct cpu_proxy_args args;
@@ -450,8 +450,8 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
             goto stop_thread;
         }
 
-        // Check calculation is the same as in case of perftest
-        double bw = (double)((message_size[idx] * num_messages) / et_ms * 1000.0f / format_factor);
+        double bw = (double)((double)((message_size[idx] * num_messages) / et_ms * 1000.0f) *
+                             ((double)8.0) / BW_FORMAT_FACTOR);
         double msgrate = (double)(num_messages / et_ms * 1000.0f / 1000000.0f);
 
         printf(REPORT_FMT_EXT, message_size[idx], resources.num_iters, bw, msgrate, (double)et_ms);

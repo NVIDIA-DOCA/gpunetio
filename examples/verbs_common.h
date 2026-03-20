@@ -59,7 +59,8 @@
 #define CUDA_THREADS_BW 512  // post list
 #define CUDA_THREADS_LAT 1   // post list
 #define NUM_ITERS 2048
-#define NUM_MSG_SIZE 10
+#define NUM_MSG_SIZE 16
+#define NUM_MSG_SIZE_LAT 10
 
 #define VERBS_TEST_QUEUE_SIZE (2048)
 // Should be sizeof(doca gpu verbs structs)
@@ -77,6 +78,8 @@
     ((unaligned_mapping_size) + (align_val) - 1) & (~((align_val) - 1))
 
 #define ALIGN_SIZE(size, align) size = ((size + (align) - 1) / (align)) * (align);
+
+#define BW_FORMAT_FACTOR 1000000000  // GBPS
 
 struct verbs_config {
     std::string nic_device_name; /* SF DOCA device name */
