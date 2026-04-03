@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.0.1]
+
+### Fixed
+
+- Minor fix to the dmabuf_fd initialization value in file `doca_gpunetio_high_level.cpp`.
+
 ## [2.0.0]
 
 ### Added
