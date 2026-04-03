@@ -28,33 +28,38 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#pragma once
+/**
+ * @file doca_sdk_wrapper.h
+ * @brief Wrapper for DOCA SDK API calls and structs
+ *
+ * This wrapper provides an abstraction layer over DOCA SDK APIs.
+ * It's enabled by default. At runtime, if the DOCA_SDK_LIB_PATH env var
+ * is set, DOCA open will look for DOCA SDK to execute functions.
+ * When DOCA_SDK_LIB_PATH env var is defined:
+ * - All DOCA SDK API calls are wrapped using dlopen
+ * - All DOCA SDK API structs are wrapped
+ * - The wrapper provides a clean abstraction layer with dynamic loading
+ *
+ * If the env var DOCA_SDK_LIB_PATH is not set, the standalone open source implementation
+ * is used. This means, DOCA SDK restricted features are not available.
+ *
+ * @{
+ */
+#ifndef DOCA_SDK_WRAPPER_H
+#define DOCA_SDK_WRAPPER_H
 
-#include <unistd.h>
-#include <stdlib.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-#include <unordered_map>
+#define DOCA_SDK_LIB_PATH_ENV_VAR "DOCA_SDK_LIB_PATH"
 
-#include "doca_gpunetio_cuda_wrapper.h"
+const size_t doca_sdk_path_length = 2048;
 
-struct doca_gpu_open {
-    CUdevice cuda_dev; /* CUDA device handler */
-    std::unordered_map<uintptr_t, struct doca_gpu_mtable *>
-        *mtable;                       /* Table of GPU/CPU memory allocated addresses */
-    bool support_gdrcopy;              ///< Boolean value that indicates if gdrcopy is
-                                       ///< supported
-    bool support_dmabuf;               ///< Boolean value that indicates if dmabuf is
-                                       ///< supported by the gpu
-    bool support_wq_gpumem;            ///< Boolean value that indicates if gpumem is
-                                       ///< available and nic-gpu mapping is supported
-    bool support_cq_gpumem;            ///< Boolean value that indicates if gpumem is
-                                       ///< available and nic-gpu mapping is supported
-    bool support_uar_gpumem;           ///< Boolean value that indicates if gpumem is
-                                       ///< available and gpu-nic mapping is supported
-    bool support_async_store_release;  ///< Boolean value that indicates if
-                                       ///< async store release is supported
-    bool support_bf_uar;               ///< Boolean value that indicates if BlueFlame
-                                       ///< is supported
-    bool need_mcst;                    ///< Boolean value that indicates if memory consistency
-                                       ///< algorithm is required for igress GPU data
-};
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* DOCA_GPUNETIO_SDK_WRAPPER_H */
+
+/** @} */

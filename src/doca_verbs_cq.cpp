@@ -36,6 +36,7 @@
 #include <mutex>
 #include <time.h>
 #include <string.h>
+#include <stdexcept>
 
 #include "host/mlx5_prm.h"
 #include "host/mlx5_ifc.h"
@@ -44,6 +45,8 @@
 #include "doca_verbs_device_attr.hpp"
 #include "doca_verbs_cq.hpp"
 #include "doca_verbs_net_wrapper.h"
+#include "doca_verbs_dev.hpp"
+#include "doca_verbs_cq_sdk_wrapper.h"
 
 #define DOCA_VERBS_CQE_SIZE 64
 
@@ -60,13 +63,42 @@ using create_cq_out = uint32_t[MLX5_ST_SZ_DW(create_cq_out)];
 } /* namespace */
 
 /**********************************************************************************************************************
- * doca_verbs_cq Member Functions
+ * doca_verbs_cq_attr_open Member Functions
  *********************************************************************************************************************/
 
-doca_verbs_cq::doca_verbs_cq(struct ibv_context *ibv_ctx, struct doca_verbs_cq_attr &cq_attr)
-    : m_ibv_ctx(ibv_ctx), m_cq_attr(cq_attr) {
+doca_verbs_cq_attr_open::doca_verbs_cq_attr_open()
+    : cq_size(0),
+      cq_context(nullptr),
+      external_umem(nullptr),
+      external_umem_offset(0),
+      external_uar(nullptr),
+      cq_overrun(DOCA_VERBS_CQ_DISABLE_OVERRUN),
+      cq_collapsed(0) {}
+
+doca_verbs_cq_attr_open::~doca_verbs_cq_attr_open() {}
+
+/**********************************************************************************************************************
+ * doca_verbs_cq_open Member Functions
+ *********************************************************************************************************************/
+
+doca_verbs_cq_open::doca_verbs_cq_open(struct ibv_context *ibv_ctx,
+                                       struct doca_verbs_cq_attr_open *cq_attr)
+    : m_ibv_ctx(ibv_ctx) {
+    if (cq_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to create CQ, cq_attr is NULL");
+        throw std::invalid_argument("cq_attr is NULL");
+    }
+
+    m_cq_attr.cq_size = cq_attr->cq_size;
+    m_cq_attr.cq_context = cq_attr->cq_context;
+    m_cq_attr.external_umem = cq_attr->external_umem;
+    m_cq_attr.external_umem_offset = cq_attr->external_umem_offset;
+    m_cq_attr.external_uar = cq_attr->external_uar;
+    m_cq_attr.cq_overrun = cq_attr->cq_overrun;
+    m_cq_attr.cq_collapsed = cq_attr->cq_collapsed;
+
     try {
-        create(cq_attr);
+        create();
     } catch (...) {
         (void)destroy();
         DOCA_LOG(LOG_ERR, "Failed to create CQ");
@@ -74,12 +106,12 @@ doca_verbs_cq::doca_verbs_cq(struct ibv_context *ibv_ctx, struct doca_verbs_cq_a
     }
 }
 
-doca_verbs_cq::~doca_verbs_cq() { static_cast<void>(destroy()); }
+doca_verbs_cq_open::~doca_verbs_cq_open() { static_cast<void>(destroy()); }
 
-doca_error_t doca_verbs_cq::create_cq_obj(uint32_t uar_id, uint32_t log_nb_cqes,
-                                          uint64_t db_umem_offset, uint32_t db_umem_id,
-                                          uint32_t wq_umem_id, bool cq_overrun,
-                                          uint8_t cq_collapsed) noexcept {
+doca_error_t doca_verbs_cq_open::create_cq_obj(uint32_t uar_id, uint32_t log_nb_cqes,
+                                               uint64_t db_umem_offset, uint32_t db_umem_id,
+                                               uint32_t wq_umem_id, bool cq_overrun,
+                                               uint8_t cq_collapsed) noexcept {
     create_cq_in create_in{0};
     create_cq_out create_out{0};
 
@@ -124,14 +156,8 @@ doca_error_t doca_verbs_cq::create_cq_obj(uint32_t uar_id, uint32_t log_nb_cqes,
     return DOCA_SUCCESS;
 }
 
-void doca_verbs_cq::create(struct doca_verbs_cq_attr &cq_attr) {
+void doca_verbs_cq_open::create() {
     auto status{DOCA_SUCCESS};
-
-    if ((cq_attr.external_umem != nullptr && cq_attr.external_umem_dbr == nullptr) ||
-        (cq_attr.external_umem == nullptr && cq_attr.external_umem_dbr != nullptr)) {
-        DOCA_LOG(LOG_ERR, "Both UMEM should be either external or internal");
-        throw DOCA_ERROR_INVALID_VALUE;
-    }
 
     /* Query device attr */
     status = doca_verbs_query_device(m_ibv_ctx, &m_verbs_device_attr);
@@ -140,12 +166,12 @@ void doca_verbs_cq::create(struct doca_verbs_cq_attr &cq_attr) {
         throw DOCA_ERROR_INVALID_VALUE;
     }
 
-    if (doca_internal_utils_is_power_of_two(cq_attr.cq_size) == false) {
+    if (doca_internal_utils_is_power_of_two(m_cq_attr.cq_size) == false) {
         DOCA_LOG(LOG_ERR, "Number of CQE is not a power of 2");
         throw DOCA_ERROR_INVALID_VALUE;
     }
 
-    m_num_cqes = static_cast<uint32_t>(cq_attr.cq_size);
+    m_num_cqes = static_cast<uint32_t>(m_cq_attr.cq_size);
     uint32_t log_nb_cqes = doca_internal_utils_log2(m_num_cqes);
 
     if (m_num_cqes > m_verbs_device_attr->m_max_cqe) {
@@ -161,7 +187,7 @@ void doca_verbs_cq::create(struct doca_verbs_cq_attr &cq_attr) {
     dbr_umem_offset =
         doca_internal_utils_align_up_uint32(dbr_umem_offset, DOCA_VERBS_CACHELINE_SIZE);
 
-    if (cq_attr.external_umem == nullptr) {
+    if (m_cq_attr.external_umem == nullptr) {
         /* Case of internal umem */
         uint32_t total_umem_size = doca_internal_utils_align_up_uint32(
             dbr_umem_offset + sc_cq_doorbell_size, DOCA_VERBS_PAGE_SIZE);
@@ -180,45 +206,30 @@ void doca_verbs_cq::create(struct doca_verbs_cq_attr &cq_attr) {
         umem_id = m_umem_obj->umem_id;
         m_db_buffer = reinterpret_cast<uint32_t *>(m_cq_buf + dbr_umem_offset);
     } else {
-        uint8_t *tmp_db_buffer;
-
         /* Case of external umem */
-        status = doca_verbs_umem_get_address(cq_attr.external_umem,
+        status = doca_verbs_umem_get_address(m_cq_attr.external_umem,
                                              reinterpret_cast<void **>(&m_cq_buf));
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to get external umem address");
             throw status;
         }
 
-        status = doca_verbs_umem_get_id(cq_attr.external_umem, &umem_id);
+        status = doca_verbs_umem_get_id(m_cq_attr.external_umem, &umem_id);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to get external umem id");
             throw status;
         }
 
         /* Case of external umem */
-        status = doca_verbs_umem_get_address(cq_attr.external_umem_dbr,
-                                             reinterpret_cast<void **>(&tmp_db_buffer));
-        if (status != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "Failed to get external umem address");
-            throw status;
-        }
-
-        status = doca_verbs_umem_get_id(cq_attr.external_umem_dbr, &dbr_umem_id);
-        if (status != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "Failed to get external umem id");
-            throw status;
-        }
-
-        dbr_umem_offset = cq_attr.external_umem_dbr_offset;
-        m_db_buffer = reinterpret_cast<uint32_t *>(tmp_db_buffer + dbr_umem_offset);
+        dbr_umem_id = umem_id;
+        m_db_buffer = reinterpret_cast<uint32_t *>(m_cq_buf + dbr_umem_offset);
     }
 
     m_ci_dbr = &m_db_buffer[MLX5_CQ_SET_CI];
     m_arm_dbr = &m_db_buffer[MLX5_CQ_ARM_DB];
 
     uint32_t uar_id{};
-    if (cq_attr.external_uar == nullptr) {
+    if (m_cq_attr.external_uar == nullptr) {
         auto uar_status = doca_verbs_wrapper_mlx5dv_devx_alloc_uar(
             m_ibv_ctx, MLX5DV_UAR_ALLOC_TYPE_NC, &m_uar_obj);
         if (uar_status != DOCA_SUCCESS) {
@@ -234,14 +245,14 @@ void doca_verbs_cq::create(struct doca_verbs_cq_attr &cq_attr) {
         uar_id = m_uar_obj->page_id;
     } else {
         /* Case of external UAR */
-        status = doca_verbs_uar_id_get(cq_attr.external_uar, &uar_id);
+        status = doca_verbs_uar_id_get(m_cq_attr.external_uar, &uar_id);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to get external UAR ID");
             throw status;
         }
 
         void *reg_addr{};
-        status = doca_verbs_uar_reg_addr_get(cq_attr.external_uar, &reg_addr);
+        status = doca_verbs_uar_reg_addr_get(m_cq_attr.external_uar, &reg_addr);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to get external UAR reg_addr");
             throw status;
@@ -251,7 +262,7 @@ void doca_verbs_cq::create(struct doca_verbs_cq_attr &cq_attr) {
 
     /* Create CQ object */
     status = create_cq_obj(uar_id, log_nb_cqes, dbr_umem_offset, dbr_umem_id, umem_id,
-                           cq_attr.cq_overrun, cq_attr.cq_collapsed);
+                           m_cq_attr.cq_overrun, m_cq_attr.cq_collapsed);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to create CQ object");
         throw DOCA_ERROR_DRIVER;
@@ -260,7 +271,7 @@ void doca_verbs_cq::create(struct doca_verbs_cq_attr &cq_attr) {
     DOCA_LOG(LOG_INFO, "DOCA IB Verbs CQ %p: has been successfully created", this);
 }
 
-doca_error_t doca_verbs_cq::destroy() noexcept {
+doca_error_t doca_verbs_cq_open::destroy() noexcept {
     if (m_verbs_device_attr) {
         auto status = doca_verbs_device_attr_free(m_verbs_device_attr);
         if (status != DOCA_SUCCESS) {
@@ -309,54 +320,146 @@ doca_error_t doca_verbs_cq::destroy() noexcept {
  * Public API functions
  *********************************************************************************************************************/
 
-doca_error_t doca_verbs_cq_attr_create(struct doca_verbs_cq_attr **verbs_cq_attr) {
-    if (verbs_cq_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create cq_attr: parameter verbs_cq_attr is NULL");
+doca_error_t doca_verbs_cq_attr_create(doca_verbs_cq_attr_t **cq_attr) {
+    doca_verbs_cq_attr_t *attr_ = nullptr;
+
+    if (cq_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to create cq_attr: parameter cq_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    *verbs_cq_attr = (struct doca_verbs_cq_attr *)calloc(1, sizeof(struct doca_verbs_cq_attr));
-    if (*verbs_cq_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create cq_attr: failed to allocate memory");
+    attr_ = (doca_verbs_cq_attr_t *)calloc(1, sizeof(doca_verbs_cq_attr_t));
+    if (attr_ == nullptr) {
+        DOCA_LOG(LOG_ERR, "error in %s: failed to allocate memory for doca_verbs_cq_attr_t",
+                 __func__);
         return DOCA_ERROR_NO_MEMORY;
     }
 
-    return DOCA_SUCCESS;
+    /* Try with DOCA SDK first */
+    auto err = doca_verbs_sdk_wrapper_cq_attr_create(&(attr_->sdk));
+    if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+        DOCA_LOG(LOG_INFO, "Use DOCA Verbs CQ Attr SDK", __func__);
+        attr_->type = DOCA_VERBS_SDK_LIB_TYPE_SDK;
+        (*cq_attr) = attr_;
+        return DOCA_SUCCESS;
+    } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+        DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+        goto exit_error;
+    }
+
+    /* In case of DOCA_SDK_WRAPPER_NOT_FOUND or DOCA_SDK_WRAPPER_NOT_SUPPORTED, just rely on open
+     * version */
+    DOCA_LOG(LOG_INFO, "Use DOCA Verbs CQ Attr open", __func__);
+
+    attr_->type = DOCA_VERBS_SDK_LIB_TYPE_OPEN;
+
+    try {
+        attr_->open = new doca_verbs_cq_attr_open();
+        DOCA_LOG(LOG_INFO, "doca_verbs_cq_attr_open=%p was created", attr_);
+        (*cq_attr) = attr_;
+        return DOCA_SUCCESS;
+    } catch (...) {
+        DOCA_LOG(LOG_ERR, "doca_verbs_cq_attr_open allocation failed");
+        goto exit_error;
+    }
+
+exit_error:
+    if (attr_ != nullptr) {
+        if (attr_->open) delete attr_->open;
+        free(attr_);
+    }
+
+    return DOCA_ERROR_INITIALIZATION;
 }
 
-doca_error_t doca_verbs_cq_attr_destroy(struct doca_verbs_cq_attr *cq_attr) {
+doca_error_t doca_verbs_cq_attr_destroy(doca_verbs_cq_attr_t *cq_attr) {
+    doca_error_t status = DOCA_SUCCESS;
+
     if (cq_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to destroy doca_verbs_cq_attr. parameter cq_attr=NULL");
+        DOCA_LOG(LOG_ERR, "Failed to destroy cq_attr: parameter cq_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
+    if (cq_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_cq_attr_destroy(cq_attr->sdk);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            cq_attr->sdk = nullptr;
+            goto exit;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            status = DOCA_ERROR_UNEXPECTED;
+            goto exit;
+        }
+    }
+
+    if (cq_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        status = DOCA_ERROR_INVALID_VALUE;
+        goto exit;
+    }
+
+exit:
+    if (cq_attr->open) delete cq_attr->open;
+    memset(cq_attr, 0, sizeof(doca_verbs_cq_attr_t));
     free(cq_attr);
-    return DOCA_SUCCESS;
+
+    return status;
 }
 
-doca_error_t doca_verbs_cq_attr_set_cq_size(struct doca_verbs_cq_attr *cq_attr, uint32_t cq_size) {
+doca_error_t doca_verbs_cq_attr_set_cq_size(doca_verbs_cq_attr_t *cq_attr, uint32_t cq_size) {
     if (cq_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set cq_size: parameter cq_attr is NULL");
+        DOCA_LOG(LOG_ERR, "Failed to set_cq_size: parameter cq_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    cq_attr->cq_size = cq_size;
-    return DOCA_SUCCESS;
-}
+    if (cq_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_cq_attr_set_cq_size(cq_attr->sdk, cq_size);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
 
-doca_error_t doca_verbs_cq_attr_set_cq_context(struct doca_verbs_cq_attr *cq_attr,
-                                               void *cq_context) {
-    if (cq_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set cq_context: parameter cq_attr is NULL");
+    if (cq_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    cq_attr->cq_context = cq_context;
+    cq_attr->open->cq_size = cq_size;
+
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_cq_attr_set_external_umem(struct doca_verbs_cq_attr *cq_attr,
-                                                  struct doca_verbs_umem *external_umem,
+doca_error_t doca_verbs_cq_attr_set_cq_context(doca_verbs_cq_attr_t *cq_attr, void *cq_context) {
+    if (cq_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set_cq_context: parameter cq_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (cq_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_cq_attr_set_cq_context(cq_attr->sdk, cq_context);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (cq_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    cq_attr->open->cq_context = cq_context;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_cq_attr_set_external_umem(doca_verbs_cq_attr_t *cq_attr,
+                                                  doca_verbs_umem_t *external_umem,
                                                   uint64_t external_umem_offset) {
     if (cq_attr == nullptr) {
         DOCA_LOG(LOG_ERR, "Failed to set external_umem: parameter cq_attr is NULL.");
@@ -367,31 +470,30 @@ doca_error_t doca_verbs_cq_attr_set_external_umem(struct doca_verbs_cq_attr *cq_
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    cq_attr->external_umem = external_umem;
-    cq_attr->external_umem_offset = external_umem_offset;
+    if (cq_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_cq_attr_set_external_umem(cq_attr->sdk, external_umem,
+                                                                    external_umem_offset);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (cq_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    cq_attr->open->external_umem = external_umem;
+    cq_attr->open->external_umem_offset = external_umem_offset;
+
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_cq_attr_set_external_dbr_umem(struct doca_verbs_cq_attr *cq_attr,
-                                                      struct doca_verbs_umem *external_umem,
-                                                      uint64_t external_umem_offset) {
-    if (cq_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set external_umem: parameter cq_attr is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-    if (external_umem == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set external_umem: parameter external_umem is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    cq_attr->external_umem_dbr = external_umem;
-    cq_attr->external_umem_dbr_offset = external_umem_offset;
-
-    return DOCA_SUCCESS;
-}
-
-doca_error_t doca_verbs_cq_attr_set_external_uar(struct doca_verbs_cq_attr *cq_attr,
-                                                 struct doca_verbs_uar *external_uar) {
+doca_error_t doca_verbs_cq_attr_set_external_uar(doca_verbs_cq_attr_t *cq_attr,
+                                                 doca_verbs_uar_t *external_uar) {
     if (cq_attr == nullptr) {
         DOCA_LOG(LOG_ERR, "Failed to set external_uar: parameter cq_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
@@ -401,90 +503,257 @@ doca_error_t doca_verbs_cq_attr_set_external_uar(struct doca_verbs_cq_attr *cq_a
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    cq_attr->external_uar = external_uar;
+    if (cq_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_cq_attr_set_external_uar(cq_attr->sdk, external_uar);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (cq_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    cq_attr->open->external_uar = external_uar;
 
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_cq_attr_set_cq_overrun(struct doca_verbs_cq_attr *cq_attr,
-                                               enum doca_verbs_cq_overrun overrun) {
+doca_error_t doca_verbs_cq_attr_set_cq_overrun(doca_verbs_cq_attr_t *cq_attr,
+                                               enum doca_verbs_cq_overrun cq_overrun) {
     if (cq_attr == nullptr) {
         DOCA_LOG(LOG_ERR, "Failed to set cq_overrun: parameter cq_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    cq_attr->cq_overrun = overrun;
+    if (cq_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_cq_attr_set_cq_overrun(cq_attr->sdk, cq_overrun);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (cq_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    cq_attr->open->cq_overrun = cq_overrun;
 
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_cq_attr_set_cq_collapsed(struct doca_verbs_cq_attr *cq_attr,
-                                                 uint8_t collapsed) {
+doca_error_t doca_verbs_cq_attr_set_cq_collapsed(doca_verbs_cq_attr_t *cq_attr,
+                                                 uint8_t cq_collapsed) {
     if (cq_attr == nullptr) {
         DOCA_LOG(LOG_ERR, "Failed to set cq_collapsed: parameter cq_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    if (collapsed != 0 && collapsed != 1) {
-        DOCA_LOG(LOG_ERR, "Failed to set cq_collapsed: value collapsed can only be 0 or 1");
+    if (cq_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_cq_attr_set_cq_collapsed(cq_attr->sdk, cq_collapsed);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (cq_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    cq_attr->cq_collapsed = collapsed;
+    if (cq_collapsed != 0 && cq_collapsed != 1) {
+        DOCA_LOG(LOG_ERR, "Failed to set cq_collapsed: value cq_collapsed can only be 0 or 1");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    cq_attr->open->cq_collapsed = cq_collapsed;
 
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_cq_create(struct ibv_context *context,
-                                  struct doca_verbs_cq_attr *verbs_cq_attr,
-                                  struct doca_verbs_cq **verbs_cq) {
-    if (context == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create doca_verbs_cq. param context=NULL");
+doca_error_t doca_verbs_cq_create(doca_dev_t *net_dev, doca_verbs_cq_attr_t *cq_attr,
+                                  doca_verbs_cq_t **cq) {
+    doca_verbs_cq_t *cq_ = nullptr;
+
+    if (cq_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to create cq: parameter cq_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    if (verbs_cq_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create doca_verbs_cq. param verbs_cq_attr=NULL");
-        return DOCA_ERROR_INVALID_VALUE;
+    cq_ = (doca_verbs_cq_t *)calloc(1, sizeof(doca_verbs_cq_t));
+    if (cq_ == nullptr) {
+        DOCA_LOG(LOG_ERR, "error in %s: failed to allocate memory for doca_verbs_cq_t", __func__);
+        return DOCA_ERROR_NO_MEMORY;
     }
+
+    /* Try with DOCA SDK first */
+    auto err = doca_verbs_sdk_wrapper_cq_create(net_dev, cq_attr, &(cq_->sdk));
+    if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+        DOCA_LOG(LOG_INFO, "Use DOCA Verbs CQ SDK", __func__);
+        cq_->type = DOCA_VERBS_SDK_LIB_TYPE_SDK;
+        (*cq) = cq_;
+        return DOCA_SUCCESS;
+    } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+        DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+        goto exit_error;
+    }
+
+    /* In case of DOCA_SDK_WRAPPER_NOT_FOUND or DOCA_SDK_WRAPPER_NOT_SUPPORTED, just rely on open
+     * version */
+    DOCA_LOG(LOG_INFO, "Use DOCA Verbs CQ open", __func__);
+
+    cq_->type = DOCA_VERBS_SDK_LIB_TYPE_OPEN;
 
     try {
-        *verbs_cq = new doca_verbs_cq(context, *verbs_cq_attr);
-        DOCA_LOG(LOG_INFO, "IB Verbs Context %p: verbs_cq=%p was created", context, *verbs_cq);
+        cq_->open = new doca_verbs_cq_open(net_dev->open->get_ctx(), cq_attr->open);
+        DOCA_LOG(LOG_INFO, "doca_verbs_cq_open=%p was created", cq_);
+        (*cq) = cq_;
         return DOCA_SUCCESS;
-    } catch (doca_error_t err) {
-        return err;
+    } catch (...) {
+        DOCA_LOG(LOG_ERR, "doca_verbs_cq_open allocation failed");
+        goto exit_error;
     }
+
+exit_error:
+    if (cq_ != nullptr) {
+        if (cq_->open) delete cq_->open;
+        free(cq_);
+    }
+
+    return DOCA_ERROR_INITIALIZATION;
 }
 
-doca_error_t doca_verbs_cq_destroy(struct doca_verbs_cq *verbs_cq) {
-    if (verbs_cq == nullptr) {
-        DOCA_LOG(LOG_INFO, "Failed to destroy verbs_cq: parameter verbs_cq is NULL");
+doca_error_t doca_verbs_cq_destroy(doca_verbs_cq_t *cq) {
+    doca_error_t status = DOCA_SUCCESS;
+
+    if (cq == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to destroy cq: parameter cq is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    auto status = verbs_cq->destroy();
-    if (status != DOCA_SUCCESS) {
-        DOCA_LOG(LOG_INFO, "Failed to destroy verbs_cq.");
-        return status;
+    if (cq->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_cq_destroy(cq->sdk);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            cq->sdk = nullptr;
+            goto exit;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            status = DOCA_ERROR_UNEXPECTED;
+            goto exit;
+        }
     }
 
-    delete (verbs_cq);
+    if (cq->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        status = DOCA_ERROR_INVALID_VALUE;
+        goto exit;
+    }
+
+    status = cq->open->destroy();
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to destroy cq.");
+        goto exit;
+    }
+
+exit:
+    if (cq->open) delete cq->open;
+    memset(cq, 0, sizeof(doca_verbs_cq_t));
+    free(cq);
+
+    return status;
+}
+
+doca_error_t doca_verbs_cq_get_wq(doca_verbs_cq_t *cq, void **cq_buf, uint32_t *cq_num_entries,
+                                  uint8_t *cq_entry_size) {
+    if (cq == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get cq wq: parameter cq is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (cq->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_cq_get_wq(cq->sdk, cq_buf, cq_num_entries, cq_entry_size);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (cq->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    *cq_buf = cq->open->get_cq_buf();
+    *cq_num_entries = cq->open->get_cq_num_entries();
+    *cq_entry_size = DOCA_VERBS_CQE_SIZE;
+
     return DOCA_SUCCESS;
 }
 
-void doca_verbs_cq_get_wq(struct doca_verbs_cq *verbs_cq, void **cq_buf, uint32_t *cq_num_entries,
-                          uint8_t *cq_entry_size) {
-    *cq_buf = verbs_cq->get_cq_buf();
-    *cq_num_entries = verbs_cq->get_cq_num_entries();
-    *cq_entry_size = DOCA_VERBS_CQE_SIZE;
+doca_error_t doca_verbs_cq_get_dbr_addr(doca_verbs_cq_t *cq, uint64_t **uar_db_reg,
+                                        uint32_t **ci_dbr, uint32_t **arm_dbr) {
+    if (cq == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get cq dbr_addr: parameter cq is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (cq->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_cq_get_dbr_addr(cq->sdk, uar_db_reg, ci_dbr, arm_dbr);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (cq->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    *uar_db_reg = cq->open->get_cq_uar_db_reg();
+    *ci_dbr = cq->open->get_cq_ci_dbr();
+    *arm_dbr = cq->open->get_cq_arm_dbr();
+
+    return DOCA_SUCCESS;
 }
 
-void doca_verbs_cq_get_dbr_addr(struct doca_verbs_cq *verbs_cq, uint64_t **uar_db_reg,
-                                uint32_t **ci_dbr, uint32_t **arm_dbr) {
-    *uar_db_reg = verbs_cq->get_cq_uar_db_reg();
-    *ci_dbr = verbs_cq->get_cq_ci_dbr();
-    *arm_dbr = verbs_cq->get_cq_arm_dbr();
-}
+doca_error_t doca_verbs_cq_get_cqn(const doca_verbs_cq_t *cq, uint32_t *cqn) {
+    if (cq == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get cq cqn: parameter cq is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
 
-uint32_t doca_verbs_cq_get_cqn(const struct doca_verbs_cq *verbs_cq) { return verbs_cq->get_cqn(); }
+    if (cq->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_cq_get_cqn(cq->sdk, cqn);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (cq->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    *cqn = cq->open->get_cqn();
+
+    return DOCA_SUCCESS;
+}

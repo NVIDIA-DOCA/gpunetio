@@ -188,14 +188,14 @@ static struct ibv_context *open_ib_device(const char *name) {
     return NULL;
 }
 
-static doca_error_t create_verbs_ah_attr(struct ibv_context *verbs_context, uint32_t gid_index,
+static doca_error_t create_verbs_ah_attr(doca_dev_t *net_dev, uint32_t gid_index,
                                          enum doca_verbs_addr_type addr_type,
                                          struct doca_verbs_gid gid,
-                                         struct doca_verbs_ah_attr **verbs_ah_attr) {
+                                         doca_verbs_ah_attr_t **verbs_ah_attr) {
     doca_error_t status = DOCA_SUCCESS, tmp_status = DOCA_SUCCESS;
-    struct doca_verbs_ah_attr *new_ah_attr = NULL;
+    doca_verbs_ah_attr_t *new_ah_attr;
 
-    status = doca_verbs_ah_attr_create(verbs_context, &new_ah_attr);
+    status = doca_verbs_ah_attr_create(net_dev, &new_ah_attr);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to create doca verbs ah attributes: %d", status);
         return status;
@@ -289,19 +289,24 @@ doca_error_t create_verbs_resources(struct verbs_config *cfg, struct verbs_resou
         goto destroy_resources;
     }
 
+    status = doca_verbs_dev_open(resources->verbs_pd, &resources->net_dev);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to create doca dev: %d", status);
+        goto destroy_resources;
+    }
+
     if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
-        status = create_verbs_ah_attr(resources->verbs_context, cfg->gid_index,
-                                      DOCA_VERBS_ADDR_TYPE_IB_NO_GRH, resources->gid,
-                                      &resources->verbs_ah_attr);
+        status =
+            create_verbs_ah_attr(resources->net_dev, cfg->gid_index, DOCA_VERBS_ADDR_TYPE_IB_NO_GRH,
+                                 resources->gid, &resources->verbs_ah_attr);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to create doca verbs ah attributes");
             goto destroy_resources;
         }
         resources->lid = port_attr.lid;
     } else {
-        status = create_verbs_ah_attr(resources->verbs_context, cfg->gid_index,
-                                      DOCA_VERBS_ADDR_TYPE_IPv4, resources->gid,
-                                      &resources->verbs_ah_attr);
+        status = create_verbs_ah_attr(resources->net_dev, cfg->gid_index, DOCA_VERBS_ADDR_TYPE_IPv4,
+                                      resources->gid, &resources->verbs_ah_attr);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to create doca verbs ah attributes");
             goto destroy_resources;
@@ -309,12 +314,14 @@ doca_error_t create_verbs_resources(struct verbs_config *cfg, struct verbs_resou
     }
 
     qp_init.gpu_dev = resources->gpu_dev;
+    qp_init.net_dev = resources->net_dev;
     qp_init.ibpd = resources->verbs_pd;
     qp_init.sq_nwqe = VERBS_TEST_QUEUE_SIZE;
     qp_init.nic_handler = resources->nic_handler;
     qp_init.mreg_type = DOCA_GPUNETIO_VERBS_MEM_REG_TYPE_DEFAULT;
     qp_init.send_dbr_mode_ext = resources->send_dbr_mode_ext;
     qp_init.cq_collapsed = resources->cq_collapsed;
+    qp_init.ordering_semantic = DOCA_VERBS_QP_ORDERING_SEMANTIC_IBTA;
 
     status = doca_gpu_verbs_create_qp_hl(&qp_init, &(resources->qp));
     if (status != DOCA_SUCCESS) {
@@ -322,7 +329,11 @@ doca_error_t create_verbs_resources(struct verbs_config *cfg, struct verbs_resou
         goto destroy_resources;
     }
 
-    resources->local_qp_number = doca_verbs_qp_get_qpn(resources->qp->qp);
+    status = doca_verbs_qp_get_qpn(resources->qp->qp, &resources->local_qp_number);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to create doca verbs high-level qp %d", status);
+        goto destroy_resources;
+    }
 
     return DOCA_SUCCESS;
 
@@ -359,6 +370,14 @@ doca_error_t destroy_verbs_resources(struct verbs_resources *resources) {
         }
     }
 
+    if (resources->net_dev) {
+        status = doca_verbs_dev_close(resources->net_dev);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to destroy pf doca gpu context: %d", status);
+            return status;
+        }
+    }
+
     if (resources->verbs_pd) ibv_dealloc_pd(resources->verbs_pd);
 
     if (resources->verbs_context) ibv_close_device(resources->verbs_context);
@@ -368,7 +387,7 @@ doca_error_t destroy_verbs_resources(struct verbs_resources *resources) {
 
 doca_error_t connect_verbs_qp(struct verbs_resources *resources) {
     doca_error_t status = DOCA_SUCCESS, tmp_status = DOCA_SUCCESS;
-    struct doca_verbs_qp_attr *verbs_qp_attr = NULL;
+    doca_verbs_qp_attr_t *verbs_qp_attr = NULL;
     int ret;
     struct ibv_port_attr port_attr;
 
@@ -472,8 +491,7 @@ doca_error_t connect_verbs_qp(struct verbs_resources *resources) {
         goto destroy_verbs_qp_attr;
     }
 
-    status = doca_verbs_qp_attr_set_allow_remote_atomic(verbs_qp_attr,
-                                                        DOCA_VERBS_QP_ATOMIC_MODE_IB_SPEC);
+    status = doca_verbs_qp_attr_set_atomic_mode(verbs_qp_attr, DOCA_VERBS_QP_ATOMIC_MODE_IB_SPEC);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to set destination QP number");
         goto destroy_verbs_qp_attr;
@@ -497,11 +515,11 @@ doca_error_t connect_verbs_qp(struct verbs_resources *resources) {
         goto destroy_verbs_qp_attr;
     }
 
-    status =
-        doca_verbs_qp_modify(resources->qp->qp, verbs_qp_attr,
-                             DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE |
-                                 DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ |
-                                 DOCA_VERBS_QP_ATTR_PKEY_INDEX | DOCA_VERBS_QP_ATTR_PORT_NUM);
+    status = doca_verbs_qp_modify(
+        resources->qp->qp, verbs_qp_attr,
+        DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE |
+            DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ | DOCA_VERBS_QP_ATTR_ATOMIC_MODE |
+            DOCA_VERBS_QP_ATTR_PKEY_INDEX | DOCA_VERBS_QP_ATTR_PORT_NUM);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to modify QP: %d", status);
         goto destroy_verbs_qp_attr;
@@ -513,11 +531,11 @@ doca_error_t connect_verbs_qp(struct verbs_resources *resources) {
         goto destroy_verbs_qp_attr;
     }
 
-    status =
-        doca_verbs_qp_modify(resources->qp->qp, verbs_qp_attr,
-                             DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_RQ_PSN |
-                                 DOCA_VERBS_QP_ATTR_DEST_QP_NUM | DOCA_VERBS_QP_ATTR_PATH_MTU |
-                                 DOCA_VERBS_QP_ATTR_AH_ATTR | DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER);
+    status = doca_verbs_qp_modify(
+        resources->qp->qp, verbs_qp_attr,
+        DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_RQ_PSN | DOCA_VERBS_QP_ATTR_DEST_QP_NUM |
+            DOCA_VERBS_QP_ATTR_PATH_MTU | DOCA_VERBS_QP_ATTR_AH_ATTR |
+            DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER | DOCA_VERBS_QP_ATTR_MAX_DEST_RD_ATOMIC);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to modify QP: %d", status);
         goto destroy_verbs_qp_attr;
@@ -532,7 +550,8 @@ doca_error_t connect_verbs_qp(struct verbs_resources *resources) {
     status = doca_verbs_qp_modify(resources->qp->qp, verbs_qp_attr,
                                   DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_SQ_PSN |
                                       DOCA_VERBS_QP_ATTR_ACK_TIMEOUT |
-                                      DOCA_VERBS_QP_ATTR_RETRY_CNT | DOCA_VERBS_QP_ATTR_RNR_RETRY);
+                                      DOCA_VERBS_QP_ATTR_RETRY_CNT | DOCA_VERBS_QP_ATTR_RNR_RETRY |
+                                      DOCA_VERBS_QP_ATTR_MAX_QP_RD_ATOMIC);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to modify QP: %d", status);
         goto destroy_verbs_qp_attr;

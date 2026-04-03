@@ -37,6 +37,7 @@
 #define DOCA_GPUNETIO_HIGH_LEVEL_H
 
 #include "doca_gpunetio.h"
+#include "doca_verbs.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -51,7 +52,8 @@ enum doca_gpu_verbs_mem_reg_type {
 };
 
 struct doca_gpu_verbs_qp_init_attr_hl {
-    struct doca_gpu *gpu_dev;
+    doca_gpu_t *gpu_dev;
+    doca_dev_t *net_dev;
     struct ibv_pd *ibpd;
     uint16_t sq_nwqe;
     uint8_t reserved1[2];
@@ -60,26 +62,25 @@ struct doca_gpu_verbs_qp_init_attr_hl {
     enum doca_gpu_verbs_send_dbr_mode_ext send_dbr_mode_ext;
     bool cq_collapsed;
     uint8_t reserved2[3];
-    uint8_t reserved3[16];
+    enum doca_verbs_qp_ordering_semantic ordering_semantic;
+    uint8_t reserved3[12];
 } __attribute__((__aligned__(8))) __attribute__((__packed__));
 
 struct doca_gpu_verbs_qp_hl {
-    struct doca_gpu *gpu_dev; /* DOCA GPU device to use */
+    doca_gpu_t *gpu_dev; /* DOCA GPU device to use */
 
     // CQ
-    struct doca_verbs_cq *cq_sq;
+    doca_verbs_cq_t *cq_sq;
     void *cq_sq_umem_gpu_ptr;
-    struct doca_verbs_umem *cq_sq_umem;
-    void *cq_sq_umem_dbr_gpu_ptr;
-    struct doca_verbs_umem *cq_sq_umem_dbr;
+    doca_verbs_umem_t *cq_sq_umem;
 
     // QP
-    struct doca_verbs_qp *qp;
+    doca_verbs_qp_t *qp;
     void *qp_umem_gpu_ptr;
-    struct doca_verbs_umem *qp_umem;
+    doca_verbs_umem_t *qp_umem;
     void *qp_umem_dbr_gpu_ptr;
-    struct doca_verbs_umem *qp_umem_dbr;
-    struct doca_verbs_uar *external_uar;
+    doca_verbs_umem_t *qp_umem_dbr;
+    doca_verbs_uar_t *external_uar;
 
     enum doca_gpu_dev_verbs_nic_handler nic_handler;
     enum doca_gpu_verbs_send_dbr_mode_ext send_dbr_mode_ext;

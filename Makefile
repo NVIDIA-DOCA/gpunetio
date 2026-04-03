@@ -89,7 +89,7 @@ LIB_SONAME := $(LIB_BASENAME).$(MAJOR_VER)
 LIB_FULL_NAME := $(LIB_BASENAME).$(LIB_VER)
 LIBS := $(LIB_DIR)/$(LIB_BASENAME) $(LIB_DIR)/$(LIB_BASENAME).$(MAJOR_VER) $(LIB_DIR)/$(LIB_BASENAME).$(VER)
 
-LIBSRCS := doca_verbs_qp.cpp doca_verbs_cq.cpp doca_verbs_device_attr.cpp doca_verbs_umem.cpp doca_verbs_srq.cpp doca_verbs_uar.cpp doca_gpunetio.cpp doca_gpunetio_log.cpp doca_gpunetio_high_level.cpp doca_gpunetio_gdrcopy.cpp
+LIBSRCS := doca_verbs_dev.cpp doca_verbs_qp.cpp doca_verbs_cq.cpp doca_verbs_device_attr.cpp doca_verbs_umem.cpp doca_verbs_srq.cpp doca_verbs_uar.cpp doca_gpunetio.cpp doca_gpunetio_log.cpp doca_gpunetio_high_level.cpp doca_gpunetio_gdrcopy.cpp
 ifeq ($(USE_CUDA_WRAPPER), 1)
 LIBSRCS += doca_verbs_cuda_wrapper.cpp
 CXXFLAGS += -DDOCA_VERBS_USE_CUDA_WRAPPER
@@ -102,6 +102,9 @@ CXXFLAGS += -DDOCA_VERBS_USE_NET_WRAPPER
 else
 LDFLAGS += -libverbs -lmlx5
 endif
+
+# Enable DOCA SDK wrappers as .so DOCA libs will be loaded at runtime
+LIBSRCS += doca_gpunetio_sdk_wrapper.cpp doca_verbs_dev_sdk_wrapper.cpp doca_verbs_umem_sdk_wrapper.cpp doca_verbs_uar_sdk_wrapper.cpp doca_verbs_cq_sdk_wrapper.cpp doca_verbs_qp_sdk_wrapper.cpp
 
 LIBOBJS := $(patsubst %.cpp, $(OBJ_DIR)/%.o, $(LIBSRCS))
 

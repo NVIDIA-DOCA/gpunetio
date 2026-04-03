@@ -96,16 +96,17 @@ struct verbs_config {
 };
 
 struct verbs_resources {
-    struct verbs_config *cfg;                 /* RDMA Verbs test configuration parameters */
-    struct doca_gpu *gpu_dev;                 /* DOCA GPU device to use */
-    uint8_t *data_buf[NUM_MSG_SIZE];          /* The local data buffer */
-    uint64_t *flag_buf[NUM_MSG_SIZE];         /* The local data buffer */
-    uint64_t remote_data_buf[NUM_MSG_SIZE];   /* The remote buffer */
-    uint64_t remote_flag_buf[NUM_MSG_SIZE];   /* The remote buffer */
-    struct ibv_context *verbs_context;        /* DOCA Verbs Context */
-    struct ibv_pd *verbs_pd;                  /* local protection domain */
-    struct doca_verbs_ah_attr *verbs_ah_attr; /* DOCA Verbs address handle */
-    struct doca_gpu_verbs_qp_hl *qp;          /* DOCA GPUNetIO high-level Verbs QP */
+    struct verbs_config *cfg;               /* RDMA Verbs test configuration parameters */
+    doca_gpu_t *gpu_dev;                    /* DOCA GPU device to use */
+    doca_dev_t *net_dev;                    /* DOCA network device to use */
+    uint8_t *data_buf[NUM_MSG_SIZE];        /* The local data buffer */
+    uint64_t *flag_buf[NUM_MSG_SIZE];       /* The local data buffer */
+    uint64_t remote_data_buf[NUM_MSG_SIZE]; /* The remote buffer */
+    uint64_t remote_flag_buf[NUM_MSG_SIZE]; /* The remote buffer */
+    struct ibv_context *verbs_context;      /* DOCA Verbs Context */
+    struct ibv_pd *verbs_pd;                /* local protection domain */
+    doca_verbs_ah_attr_t *verbs_ah_attr;    /* DOCA Verbs address handle */
+    struct doca_gpu_verbs_qp_hl *qp;        /* DOCA GPUNetIO high-level Verbs QP */
     bool qp_group;
     int conn_socket;                         /* Connection socket fd */
     uint32_t local_qp_number;                /* Local QP number */

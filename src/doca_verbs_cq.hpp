@@ -37,22 +37,34 @@
 
 #include "host/doca_verbs.h"
 
-struct doca_verbs_cq_attr {
+struct doca_verbs_cq_attr_open {
+   public:
+    /**
+     * @brief constructor
+     */
+    doca_verbs_cq_attr_open();
+
+    /**
+     * @brief destructor
+     */
+    ~doca_verbs_cq_attr_open();
+
     uint32_t cq_size{};
     void *cq_context{};
-    struct doca_verbs_umem *external_umem{};
-    struct doca_verbs_umem *external_umem_dbr{};
+    doca_verbs_umem_t *external_umem{};
     uint32_t external_umem_offset{};
-    uint64_t external_umem_dbr_offset{};
-    struct doca_verbs_uar *external_uar{};
+    doca_verbs_uar_t *external_uar{};
     enum doca_verbs_cq_overrun cq_overrun;
     uint8_t cq_collapsed;
+
+    doca_verbs_cq_attr_open(doca_verbs_cq_attr_open const &) = delete;
+    doca_verbs_cq_attr_open &operator=(doca_verbs_cq_attr_open const &) = delete;
 };
 
 /**
  *  @brief This struct implements the doca verbs cq
  */
-struct doca_verbs_cq {
+struct doca_verbs_cq_open {
    public:
     /**
      * @brief constructor
@@ -63,12 +75,12 @@ struct doca_verbs_cq {
      * The DOCA IB Verbs CQ attributes
      *
      */
-    doca_verbs_cq(struct ibv_context *ibv_ctx, struct doca_verbs_cq_attr &cq_attr);
+    doca_verbs_cq_open(struct ibv_context *ibv_ctx, struct doca_verbs_cq_attr_open *cq_attr);
 
     /**
      * @brief destructor
      */
-    ~doca_verbs_cq();
+    ~doca_verbs_cq_open();
 
     /**
      * @brief destroy the cq
@@ -84,7 +96,7 @@ struct doca_verbs_cq {
      * @brief create the cq
      *
      */
-    void create(struct doca_verbs_cq_attr &cq_attr);
+    void create();
 
     doca_error_t create_cq_obj(uint32_t uar_id, uint32_t log_nb_cqes, uint64_t db_umem_offset,
                                uint32_t db_umem_id, uint32_t wq_umem_id, bool cq_overrun,
@@ -145,9 +157,9 @@ struct doca_verbs_cq {
     uint32_t m_cqn{};
     uint32_t *m_ci_dbr{};
     uint32_t *m_arm_dbr{};
-    struct doca_verbs_cq_attr m_cq_attr {};
+    struct doca_verbs_cq_attr_open m_cq_attr;
     struct doca_verbs_device_attr *m_verbs_device_attr{};
 
-    doca_verbs_cq(doca_verbs_cq const &) = delete;
-    doca_verbs_cq &operator=(doca_verbs_cq const &) = delete;
+    doca_verbs_cq_open(doca_verbs_cq_open const &) = delete;
+    doca_verbs_cq_open &operator=(doca_verbs_cq_open const &) = delete;
 };

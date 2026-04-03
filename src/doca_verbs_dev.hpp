@@ -36,76 +36,41 @@
 #include <stdlib.h>
 
 #include "host/doca_verbs.h"
-#include "doca_verbs_dev.hpp"
 
 /**
- *  @brief This struct implements the doca verbs uar
+ *  @brief This struct implements the doca verbs dev
  */
-struct doca_verbs_uar_open {
+struct doca_dev_open {
    public:
     /**
      * @brief constructor
      *
-     * @param [in] context
+     * @param [in] verbs_ctx
      * ibv_context
-     * @param [in] allocation_type
-     * The uar allocation type.
+     * @param [in] verbs_pd
+     * ibv_pd
      */
-    doca_verbs_uar_open(struct ibv_context *context,
-                        enum doca_verbs_uar_allocation_type allocation_type);
+    doca_dev_open(struct ibv_context *verbs_ctx, struct ibv_pd *verbs_pd);
 
     /**
      * @brief destructor
      */
-    ~doca_verbs_uar_open();
+    ~doca_dev_open();
 
     /**
-     * @brief destroy the uar
-     *
-     * @return
-     * DOCA_SUCCESS on successful destroy.
-     * DOCA_ERROR_DRIVER on failure to destroy the uar.
-     *
+     * @brief Return device ib_ctx
      */
-    doca_error_t destroy() noexcept;
+    struct ibv_context *get_ctx() const { return m_ibv_ctx; }
 
     /**
-     * @brief create the uar
-     *
+     * @brief Return device ib_pd
      */
-    void create();
-
-    /**
-     * @brief Get uar ID
-     *
-     * @return uar ID
-     */
-    uint32_t get_uar_id() const noexcept { return m_uar_id; }
-
-    /**
-     * @brief Get UAR reg address
-     *
-     * @return UAR reg address
-     */
-    void *get_reg_addr() const noexcept { return m_reg_addr; }
-
-    /**
-     * @brief Get DBR-less DB address
-     *
-     * @return DBR-less DB address
-     */
-    void *get_dbr_less_addr() const noexcept { return m_dbr_less_addr; }
+    struct ibv_pd *get_pd() const { return m_ibv_pd; }
 
    private:
-    struct mlx5dv_devx_uar *m_uar{};
     struct ibv_context *m_ibv_ctx{};
-    enum doca_verbs_uar_allocation_type m_allocation_type {
-        DOCA_VERBS_UAR_ALLOCATION_TYPE_BLUEFLAME
-    };
-    uint32_t m_uar_id{};
-    void *m_reg_addr{};
-    void *m_dbr_less_addr{};
+    struct ibv_pd *m_ibv_pd{};
 
-    doca_verbs_uar_open(doca_verbs_uar_open const &) = delete;
-    doca_verbs_uar_open &operator=(doca_verbs_uar_open const &) = delete;
+    doca_dev_open(doca_dev_open const &) = delete;
+    doca_dev_open &operator=(doca_dev_open const &) = delete;
 };

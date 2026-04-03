@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.0.0]
+
+### Added
+
+- Introduced the dynamic loading of DOCA SDK functions: to access DOCA SDK restricted functionality from GPUNetIO open source, CPU functions now use internal `dlopen`-based dynamic linking.
+- If the environment variable `DOCA_SDK_LIB_PATH` is set to a valid [DOCA SDK](https://developer.nvidia.com/doca-downloads) library installation directory (typically `/opt/mellanox/doca/libs/x86_64-linux-gnu` for x86 systems), GPUNetIO open dynamically loads the DOCA SDK functions and uses them instead of the standalone open-source implementation.
+- If the environment variable `DOCA_SDK_LIB_PATH` is not set or points to an invalid DOCA SDK library installation directory, GPUNetIO open uses the standalone open-source implementation for all CPU functions. In this case, DOCA SDK closed-source features cannot be used.
+- N.B. It is the users’ responsibility to properly install the [DOCA SDK](https://developer.nvidia.com/doca-downloads) on the system if restricted features are required (e.g., ordering semantic).
+- The transition from open to SDK mode breaks backward compatibility of CPU functions, because function signatures and data structure types had to be updated. Since backward compatibility is broken, the GPUNetIO open version has been bumped to 3.0.0.
+
+### Changed
+
+- To enable atomic operations on a QP, the flag `DOCA_VERBS_QP_ATTR_ATOMIC_MODE` is required in the `attr_mask` parameter passed to `doca_verbs_qp_modify`.
+- The function `doca_verbs_qp_attr_set_allow_remote_atomic` has been renamed to `doca_verbs_qp_attr_set_atomic_mode`.
+- To improve compatibility between the SDK and open implementations, a new object, `doca_dev`, has been introduced and is now required for some operations. An example can be found in the `examples/verbs_common.cpp` file: open the device (`open_ib_device`), create a PD (`ibv_alloc_pd`), and then create a `doca_dev` (`doca_verbs_dev_open(pd, &net_dev)`).
+- To achieve better performance, the default MTU set in the examples is now 4K (file `examples/verbs_common.cpp`, function `doca_verbs_qp_attr_set_path_mtu`). Please ensure your network interface is correctly set to, at least, 4K MTU. If not, you can change the value to 1K in the examples code.
+
+### Removed
+
+- To simplify the CPU-side code, some unused functions `doca_verbs_qp_init_attr_get_*` and `doca_verbs_qp_attr_get_*` have been removed. If needed, will be re-introduced on-demand.
+
 ## [2.0.1]
 
 ### Fixed

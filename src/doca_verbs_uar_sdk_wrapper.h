@@ -28,33 +28,45 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#pragma once
+/**
+ * @file doca_verbs_uar_sdk_wrapper.h
+ * @brief Wrapper for DOCA SDK API calls and structs
+ *
+ * This wrapper provides an abstraction layer over DOCA SDK APIs.
+ * It's enabled by default. At runtime, if the DOCA_SDK_LIB_PATH env var
+ * is set, DOCA open will look for DOCA SDK to execute functions.
+ * When DOCA_SDK_LIB_PATH env var is defined:
+ * - All DOCA SDK API calls are wrapped using dlopen
+ * - All DOCA SDK API structs are wrapped
+ * - The wrapper provides a clean abstraction layer with dynamic loading
+ *
+ * If the env var DOCA_SDK_LIB_PATH is not set, the standalone open source implementation
+ * is used. This means, DOCA SDK restricted features are not available.
+ *
+ * @{
+ */
+#ifndef DOCA_VERBS_SDK_WRAPPER_UAR_H
+#define DOCA_VERBS_SDK_WRAPPER_UAR_H
 
-#include <unistd.h>
-#include <stdlib.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-#include <unordered_map>
+#include "host/doca_error.h"
+#include "host/doca_verbs.h"
+#include "doca_sdk_wrapper.h"
 
-#include "doca_gpunetio_cuda_wrapper.h"
+/* Wrapper function declarations */
+doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_uar_create(
+    doca_dev_t *net_dev, enum doca_verbs_uar_allocation_type allocation_type, void **uar);
+doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_uar_destroy(void *uar);
+doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_uar_get_id(void *uar, uint32_t *uar_id);
+doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_uar_reg_addr_get(void *uar, void **reg);
 
-struct doca_gpu_open {
-    CUdevice cuda_dev; /* CUDA device handler */
-    std::unordered_map<uintptr_t, struct doca_gpu_mtable *>
-        *mtable;                       /* Table of GPU/CPU memory allocated addresses */
-    bool support_gdrcopy;              ///< Boolean value that indicates if gdrcopy is
-                                       ///< supported
-    bool support_dmabuf;               ///< Boolean value that indicates if dmabuf is
-                                       ///< supported by the gpu
-    bool support_wq_gpumem;            ///< Boolean value that indicates if gpumem is
-                                       ///< available and nic-gpu mapping is supported
-    bool support_cq_gpumem;            ///< Boolean value that indicates if gpumem is
-                                       ///< available and nic-gpu mapping is supported
-    bool support_uar_gpumem;           ///< Boolean value that indicates if gpumem is
-                                       ///< available and gpu-nic mapping is supported
-    bool support_async_store_release;  ///< Boolean value that indicates if
-                                       ///< async store release is supported
-    bool support_bf_uar;               ///< Boolean value that indicates if BlueFlame
-                                       ///< is supported
-    bool need_mcst;                    ///< Boolean value that indicates if memory consistency
-                                       ///< algorithm is required for igress GPU data
-};
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* DOCA_VERBS_SDK_WRAPPER_UAR_H */
+
+/** @} */

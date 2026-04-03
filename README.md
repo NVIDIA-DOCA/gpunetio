@@ -35,6 +35,7 @@ This approach promotes knowledge sharing while reducing the engineering effort r
 - Support for connecting QPs over Reliable Connection (RC) transport.
 - Move CQ/QP resources between CPU and GPU memory.
 - Compatibility with standard `verbs` resources (MRs, PDs, context, device attributes, etc.).
+- Possibility to use DOCA SDK restricted features via internal `dlopen`-based dynamic linking.
 
 **GPU data path:**
 - Device-side APIs to post direct work requests (WRs) and poll completion responses (CQEs).
@@ -105,6 +106,61 @@ Logs are managed by macro `DOCA_LOG`, relying on `syslog` with different log lev
 
 By default, the `EMERG` level (0) is set. To print the `DOCA_LOG` with higher level, please set the `DOCA_GPUNETIO_LOG`
 environment variable to the right level number.
+
+## Enable SDK mode
+
+To access DOCA SDK restricted functionality from GPUNetIO open source, CPU functions now use internal `dlopen`-based dynamic linking.
+If the environment variable `DOCA_SDK_LIB_PATH` is set to a valid [DOCA SDK](https://developer.nvidia.com/doca-downloads) library installation directory (typically `/opt/mellanox/doca/libs/x86_64-linux-gnu` for x86 systems), GPUNetIO open dynamically loads the DOCA SDK functions and uses them instead of the standalone open-source implementation.
+
+An example command line to enable the SDK mode:
+
+```
+$ DOCA_GPUNETIO_LOG=6 DOCA_SDK_LIB_PATH=/opt/mellanox/doca/lib/x86_64-linux-gnu ./gpunetio_verbs_write_lat -d mlx5_0 -g 8a:00.0
+Wed Apr  1 10:42:00 2026 [INFO] [examples/verbs_common.cpp]: 255: create_verbs_resources(): Setting GPU device 0 at 8a:00.0
+Wed Apr  1 10:42:00 2026 [WARNING] [src/doca_gpunetio_sdk_wrapper.cpp]: 202: doca_gpu_sdk_wrapper_create(): Env var DOCA_SDK_LIB_PATH set to /opt/mellanox/doca/lib/x86_64-linux-gnu. DOCA SDK is in use
+Wed Apr  1 10:42:00 2026 [INFO] [src/doca_gpunetio.cpp]: 120: doca_gpu_create(): Use DOCA GPUNetIO SDK
+Wed Apr  1 10:42:00 2026 [WARNING] [src/doca_verbs_dev_sdk_wrapper.cpp]: 164: doca_verbs_sdk_wrapper_dev_open_from_pd(): Env var DOCA_SDK_LIB_PATH set to /opt/mellanox/doca/lib/x86_64-linux-gnu. DOCA SDK is in use
+Wed Apr  1 10:42:00 2026 [INFO] [src/doca_verbs_dev.cpp]: 83: doca_verbs_dev_open(): Use DOCA Verbs Dev SDK
+Wed Apr  1 10:42:00 2026 [WARNING] [src/doca_verbs_qp_sdk_wrapper.cpp]: 1430: doca_verbs_sdk_wrapper_ah_attr_create(): Env var DOCA_SDK_LIB_PATH set to /opt/mellanox/doca/lib/x86_64-linux-gnu. DOCA SDK is in use
+Wed Apr  1 10:42:00 2026 [INFO] [src/doca_verbs_qp.cpp]: 2902: doca_verbs_ah_attr_create(): Use DOCA Verbs AH Attr SDK
+Wed Apr  1 10:42:00 2026 [WARNING] [src/doca_verbs_cq_sdk_wrapper.cpp]: 246: doca_verbs_sdk_wrapper_cq_attr_create(): Env var DOCA_SDK_LIB_PATH set to /opt/mellanox/doca/lib/x86_64-linux-gnu. DOCA SDK is in use
+Wed Apr  1 10:42:00 2026 [INFO] [src/doca_verbs_cq.cpp]: 327: doca_verbs_cq_attr_create(): Use DOCA Verbs CQ Attr SDK
+Wed Apr  1 10:42:00 2026 [WARNING] [src/doca_verbs_umem_sdk_wrapper.cpp]: 204: doca_verbs_sdk_wrapper_umem_create(): Env var DOCA_SDK_LIB_PATH set to /opt/mellanox/doca/lib/x86_64-linux-gnu. DOCA SDK is in use
+Wed Apr  1 10:42:00 2026 [INFO] [src/doca_verbs_umem.cpp]: 150: doca_verbs_umem_create(): Use DOCA Verbs UMEM SDK
+Wed Apr  1 10:42:00 2026 [WARNING] [src/doca_verbs_cq_sdk_wrapper.cpp]: 449: doca_verbs_sdk_wrapper_cq_create(): Env var DOCA_SDK_LIB_PATH set to /opt/mellanox/doca/lib/x86_64-linux-gnu. DOCA SDK is in use
+Wed Apr  1 10:42:00 2026 [INFO] [src/doca_verbs_cq.cpp]: 589: doca_verbs_cq_create(): Use DOCA Verbs CQ SDK
+Wed Apr  1 10:42:00 2026 [WARNING] [src/doca_verbs_uar_sdk_wrapper.cpp]: 160: doca_verbs_sdk_wrapper_uar_create(): Env var DOCA_SDK_LIB_PATH set to /opt/mellanox/doca/lib/x86_64-linux-gnu. DOCA SDK is in use
+Wed Apr  1 10:42:00 2026 [INFO] [src/doca_verbs_uar.cpp]: 164: doca_verbs_uar_create(): Use DOCA Verbs UAR SDK
+Wed Apr  1 10:42:00 2026 [WARNING] [src/doca_verbs_qp_sdk_wrapper.cpp]: 574: doca_verbs_sdk_wrapper_qp_init_attr_create(): Env var DOCA_SDK_LIB_PATH set to /opt/mellanox/doca/lib/x86_64-linux-gnu. DOCA SDK is in use
+....
+```
+Prints like `Use DOCA GPUNetIO SDK`, `Use DOCA Verbs Dev SDK`, etc.. indicate the path specified in `DOCA_SDK_LIB_PATH` correcly points to a DOCA SDK library installation directory.
+
+Conversely, if something is wrong with the path specified in `DOCA_SDK_LIB_PATH`, the output changes:
+
+```
+$ DOCA_GPUNETIO_LOG=6 DOCA_SDK_LIB_PATH=/opt/mellanox/doca/lib/x86_64 ./gpunetio_verbs_write_lat -d mlx5_0 -g 8a:00.0
+Wed Apr  1 10:41:52 2026 [INFO] [examples/verbs_common.cpp]: 255: create_verbs_resources(): Setting GPU device 0 at 8a:00.0
+Wed Apr  1 10:41:52 2026 [ERR] [src/doca_gpunetio_sdk_wrapper.cpp]: 110: doca_gpunetio_sdk_wrapper_init(): Failed to find libdoca_common.so library /opt/mellanox/doca/lib/x86_64/libdoca_common.so (DOCA_SDK_LIB_PATH=/opt/mellanox/doca/lib/x86_64)
+Wed Apr  1 10:41:52 2026 [WARNING] [src/doca_gpunetio_sdk_wrapper.cpp]: 193: doca_gpu_sdk_wrapper_create(): Env var DOCA_SDK_LIB_PATH set to /opt/mellanox/doca/lib/x86_64, but DOCA SDK libraries not found. DOCA SDK is not in use
+Wed Apr  1 10:41:52 2026 [INFO] [src/doca_gpunetio.cpp]: 131: doca_gpu_create(): Use DOCA GPUNetIO open
+Wed Apr  1 10:41:52 2026 [ERR] [src/doca_verbs_dev_sdk_wrapper.cpp]: 87: doca_verbs_sdk_wrapper_init(): Failed to find libdoca_common.so library /opt/mellanox/doca/lib/x86_64/libdoca_common.so (DOCA_SDK_LIB_PATH=/opt/mellanox/doca/lib/x86_64)
+Wed Apr  1 10:41:52 2026 [WARNING] [src/doca_verbs_dev_sdk_wrapper.cpp]: 154: doca_verbs_sdk_wrapper_dev_open_from_pd(): Env var DOCA_SDK_LIB_PATH set to /opt/mellanox/doca/lib/x86_64, but DOCA SDK libraries not found. DOCA SDK is not in use
+Wed Apr  1 10:41:52 2026 [INFO] [src/doca_verbs_dev.cpp]: 94: doca_verbs_dev_open(): Use DOCA Verbs Dev open
+Wed Apr  1 10:41:52 2026 [INFO] [src/doca_verbs_dev.cpp]: 106: doca_verbs_dev_open(): doca_verbs_dev_open=0x564b462a7e00 was created
+Wed Apr  1 10:41:52 2026 [ERR] [src/doca_verbs_qp_sdk_wrapper.cpp]: 295: doca_verbs_sdk_wrapper_init(): Failed to find libdoca_common.so library /opt/mellanox/doca/lib/x86_64/libdoca_common.so (DOCA_SDK_LIB_PATH=/opt/mellanox/doca/lib/x86_64)
+Wed Apr  1 10:41:52 2026 [WARNING] [src/doca_verbs_qp_sdk_wrapper.cpp]: 1404: doca_verbs_sdk_wrapper_ah_attr_create(): Env var DOCA_SDK_LIB_PATH set to /opt/mellanox/doca/lib/x86_64, but DOCA SDK libraries not found. DOCA SDK is not in use
+Wed Apr  1 10:41:52 2026 [INFO] [src/doca_verbs_qp.cpp]: 2913: doca_verbs_ah_attr_create(): Use DOCA Verbs AH Attr open
+Wed Apr  1 10:41:52 2026 [INFO] [src/doca_verbs_qp.cpp]: 2919: doca_verbs_ah_attr_create(): doca_verbs_verbs_ah_open=0x564b462a7e20 was created
+Wed Apr  1 10:41:52 2026 [ERR] [src/doca_verbs_cq_sdk_wrapper.cpp]: 133: doca_verbs_sdk_wrapper_init(): Failed to find libdoca_common.so library /opt/mellanox/doca/lib/x86_64/libdoca_common.so (DOCA_SDK_LIB_PATH=/opt/mellanox/doca/lib/x86_64)
+Wed Apr  1 10:41:52 2026 [WARNING] [src/doca_verbs_cq_sdk_wrapper.cpp]: 237: doca_verbs_sdk_wrapper_cq_attr_create(): Env var DOCA_SDK_LIB_PATH set to /opt/mellanox/doca/lib/x86_64, but DOCA SDK libraries not found. DOCA SDK is not in use
+Wed Apr  1 10:41:52 2026 [INFO] [src/doca_verbs_cq.cpp]: 338: doca_verbs_cq_attr_create(): Use DOCA Verbs CQ Attr open
+Wed Apr  1 10:41:52 2026 [INFO] [src/doca_verbs_cq.cpp]: 344: doca_verbs_cq_attr_create(): doca_verbs_cq_attr_open=0x564b462a7eb0 was created
+Wed Apr  1 10:41:52 2026 [ERR] [src/doca_verbs_umem_sdk_wrapper.cpp]: 106: doca_verbs_sdk_wrapper_init(): Failed to find libdoca_gpunetio.so library /opt/mellanox/doca/lib/x86_64/libdoca_gpunetio.so (DOCA_SDK_LIB_PATH=/opt/mellanox/doca/lib/x86_64)
+Wed Apr  1 10:41:52 2026 [WARNING] [src/doca_verbs_umem_sdk_wrapper.cpp]: 186: doca_verbs_sdk_wrapper_umem_create(): Env var DOCA_SDK_LIB_PATH set to /opt/mellanox/doca/lib/x86_64, but DOCA SDK libraries not found. DOCA SDK is not in use
+Wed Apr  1 10:41:52 2026 [INFO] [src/doca_verbs_umem.cpp]: 161: doca_verbs_umem_create(): Use DOCA Verbs UMEM open
+...
+```
 
 ## Examples
 

@@ -127,7 +127,7 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
              * method.
              */
             status =
-                doca_gpu_dmabuf_fd(resources->gpu_dev, resources->data_buf[idx], size, &dmabuf_fd);
+                doca_gpu_get_dmabuf_fd(resources->gpu_dev, resources->data_buf[idx], size, &dmabuf_fd);
             if (status == DOCA_SUCCESS) {
                 resources->data_mr[idx] = ibv_reg_dmabuf_mr(
                     resources->verbs_pd, 0, size, (uint64_t)resources->data_buf[idx], dmabuf_fd,
@@ -445,8 +445,7 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
             goto stop_thread;
         }
 
-        double bw = (double)((double)((message_size[idx] * num_messages) / et_ms * 1000.0f) *
-                             ((double)8.0) / BW_FORMAT_FACTOR);
+        double bw = (double)((double)((message_size[idx] * num_messages) / et_ms * 1000.0f) * ((double)8.0) / BW_FORMAT_FACTOR);
         double msgrate = (double)(num_messages / et_ms * 1000.0f / 1000000.0f);
 
         printf(REPORT_FMT_EXT, message_size[idx], resources.num_iters, bw, msgrate, (double)et_ms);
