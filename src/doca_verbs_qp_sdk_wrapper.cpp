@@ -39,6 +39,12 @@
 #include "doca_gpunetio_log.hpp"
 #include "doca_verbs_uar_sdk_wrapper.h"
 
+/*
+ * Enable DOCA SDK log errors on stderr.
+ * Disabled by default to avoid extra-prints on screen.
+ */
+#define DOCA_VERBS_QP_SDK_WRAPPER_ENABLE_DEBUG 0
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -168,6 +174,8 @@ typedef doca_error_t (*doca_verbs_bridge_verbs_context_import_t)(struct ibv_cont
                                                                  uint32_t flags,
                                                                  void **verbs_context);
 
+typedef doca_error_t (*doca_log_backend_create_with_file_sdk_t)(FILE *fptr, void **backend);
+
 /* Global function pointers */
 static doca_verbs_qp_init_attr_create_t p_doca_verbs_qp_init_attr_create = nullptr;
 static doca_verbs_qp_init_attr_destroy_t p_doca_verbs_qp_init_attr_destroy = nullptr;
@@ -260,6 +268,8 @@ static doca_verbs_qp_get_qpn_t p_doca_verbs_qp_get_qpn = nullptr;
 static doca_rdma_bridge_get_dev_pd_t p_doca_rdma_bridge_get_dev_pd = nullptr;
 static doca_verbs_bridge_verbs_pd_import_t p_doca_verbs_bridge_verbs_pd_import = nullptr;
 static doca_verbs_bridge_verbs_context_import_t p_doca_verbs_bridge_verbs_context_import = nullptr;
+
+static doca_log_backend_create_with_file_sdk_t p_doca_log_backend_create_with_file_sdk = nullptr;
 
 static void *common_handle = nullptr;
 static void *verbs_handle = nullptr;
@@ -496,6 +506,10 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
         (doca_verbs_bridge_verbs_context_import_t)get_verbs_sdk_symbol(
             "doca_verbs_bridge_verbs_context_import");
 
+    p_doca_log_backend_create_with_file_sdk =
+        (doca_log_backend_create_with_file_sdk_t)get_verbs_sdk_symbol(
+            "doca_log_backend_create_with_file_sdk");
+
     /* Check if all symbols were found */
     if (!p_doca_verbs_qp_init_attr_create || !p_doca_verbs_qp_init_attr_destroy ||
         !p_doca_verbs_qp_init_attr_set_pd || !p_doca_verbs_qp_init_attr_set_send_cq ||
@@ -538,7 +552,7 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
         !p_doca_verbs_qp_get_uar_addr || !p_doca_verbs_qp_get_qpn ||
 
         !p_doca_rdma_bridge_get_dev_pd || !p_doca_verbs_bridge_verbs_pd_import ||
-        !p_doca_verbs_bridge_verbs_context_import) {
+        !p_doca_verbs_bridge_verbs_context_import || !p_doca_log_backend_create_with_file_sdk) {
         DOCA_LOG(LOG_ERR, "Failed to get all required DOCA Verbs Dev SDK symbols\n");
         dlclose(verbs_handle);
         verbs_handle = nullptr;
@@ -584,6 +598,7 @@ static int get_sdk_wrapper_env_var(void) {
 doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_init_attr_create(void **qp_init_attr) {
     doca_error_t doca_err = DOCA_SUCCESS;
     const char *val = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
+    void *sdk_log;
 
     if (get_sdk_wrapper_env_var() > 0) {
         if (init_verbs_sdk_wrapper() != 0) {
@@ -593,6 +608,14 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_init_attr_create(void **qp_in
                      val);
             return DOCA_SDK_WRAPPER_NOT_FOUND;
         }
+
+#ifdef DOCA_VERBS_QP_SDK_WRAPPER_ENABLE_DEBUG == 1
+        doca_err = p_doca_log_backend_create_with_file_sdk(stderr, &sdk_log);
+        if (doca_err != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
+            return DOCA_SDK_WRAPPER_API_ERROR;
+        }
+#endif
 
         doca_err = p_doca_verbs_qp_init_attr_create(qp_init_attr);
         if (doca_err == DOCA_SUCCESS) {

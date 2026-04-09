@@ -213,10 +213,12 @@ static doca_error_t create_verbs_ah_attr(doca_dev_t *net_dev, uint32_t gid_index
         goto destroy_verbs_ah;
     }
 
-    status = doca_verbs_ah_attr_set_hop_limit(new_ah_attr, VERBS_TEST_HOP_LIMIT);
-    if (status != DOCA_SUCCESS) {
-        DOCA_LOG(LOG_ERR, "Failed to set hop limit: %d", status);
-        goto destroy_verbs_ah;
+    if (addr_type == DOCA_VERBS_ADDR_TYPE_IPv4 || addr_type == DOCA_VERBS_ADDR_TYPE_IPv6) {
+        status = doca_verbs_ah_attr_set_hop_limit(new_ah_attr, VERBS_TEST_HOP_LIMIT);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to set hop limit: %d", status);
+            goto destroy_verbs_ah;
+        }
     }
 
     *verbs_ah_attr = new_ah_attr;
