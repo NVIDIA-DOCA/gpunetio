@@ -846,7 +846,8 @@ doca_error_t doca_gpu_verbs_get_qp_dev(struct doca_gpu_verbs_qp *qp,
             return DOCA_ERROR_DRIVER;
         }
 
-        if (qp->send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) {
+        if ((qp->send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
+            (qp->qp_cpu->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY)) {
             assert(qp->gpu_dev->support_gdrcopy);
             qp->cpu_db = &qp->qp_gpu_h->sq_wqe_pi;
         }
@@ -861,8 +862,10 @@ doca_error_t doca_gpu_verbs_unexport_qp(struct doca_gpu *gpu_dev,
                                         struct doca_gpu_verbs_qp *qp_gverbs) {
     if (gpu_dev == nullptr || qp_gverbs == nullptr) return DOCA_ERROR_INVALID_VALUE;
 
-    if (qp_gverbs->cpu_db &&
-        (qp_gverbs->send_dbr_mode_ext != DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED))
+    if (qp_gverbs->cpu_db && ((qp_gverbs->send_dbr_mode_ext !=
+                               DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) ||
+                              (qp_gverbs->qp_cpu && (qp_gverbs->qp_cpu->nic_handler ==
+                                                     DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY))))
         doca_gpu_mem_free(gpu_dev, qp_gverbs->cpu_db);
 
     if (qp_gverbs->qp_cpu) {
@@ -931,7 +934,8 @@ doca_error_t doca_gpu_verbs_export_multi_qps_dev(struct doca_gpu *gpu_dev,
         qp = qps[qp_idx];
         assert(qp->qp_cpu != nullptr);
         qp->qp_gpu = &(qp_gpus_d[qp_idx]);
-        if (qp->send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) {
+        if ((qp->send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
+            (qp->qp_cpu->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY)) {
             qp->qp_gpu_h = &(qp_cpus[qp_idx]);
             qp->cpu_db = &qp->qp_gpu_h->sq_wqe_pi;
         }
@@ -975,33 +979,32 @@ doca_error_t doca_gpu_verbs_unexport_multi_qps_dev(struct doca_gpu *gpu_dev,
     return status;
 }
 
-static inline void priv_cpu_proxy_progress_full_assisted(struct doca_gpu_verbs_qp *qp, bool *out_progressed) {
+static inline void priv_cpu_proxy_progress_full_assisted(struct doca_gpu_verbs_qp *qp,
+                                                         bool *out_progressed) {
     uint32_t tmp_db = 0;
     __be32 dbr_val;
     bool progressed = false;
 
-    tmp_db = (uint32_t)(reinterpret_cast<std::atomic<uint64_t>*>(qp->cpu_db)->load(std::memory_order_relaxed));
+    tmp_db = (uint32_t)(reinterpret_cast<std::atomic<uint64_t> *>(qp->cpu_db)
+                            ->load(std::memory_order_relaxed));
     if (tmp_db != qp->sq_wqe_pi_last) {
         struct doca_gpunetio_ib_mlx5_wqe_ctrl_seg ctrl_seg = {
             .opmod_idx_opcode = htobe32(tmp_db << 8), .qpn_ds = qp->sq_num_shift8_be};
 
-        if (!qp->send_dbr_mode_ext) {
+        if (qp->send_dbr_mode_ext != DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_HW) {
             dbr_val = htobe32(tmp_db & 0xffff);
 
             // Ring the DB ASAP.
             // The second DB ringing happens after the fence. This is used when the NIC enters a
             // recovery state and it needs to read DBR.
             reinterpret_cast<std::atomic<uint64_t> *>(qp->sq_db)->store(
-                *reinterpret_cast<uint64_t *>(&ctrl_seg),
-                std::memory_order_relaxed);
-            reinterpret_cast<std::atomic<uint32_t> *>(qp->sq_dbrec)->store(
-                dbr_val,
-                std::memory_order_relaxed);
+                *reinterpret_cast<uint64_t *>(&ctrl_seg), std::memory_order_relaxed);
+            reinterpret_cast<std::atomic<uint32_t> *>(qp->sq_dbrec)
+                ->store(dbr_val, std::memory_order_relaxed);
             std::atomic_thread_fence(std::memory_order_release);
         }
         reinterpret_cast<std::atomic<uint64_t> *>(qp->sq_db)->store(
-            *reinterpret_cast<uint64_t *>(&ctrl_seg),
-            std::memory_order_relaxed);
+            *reinterpret_cast<uint64_t *>(&ctrl_seg), std::memory_order_relaxed);
 
         qp->sq_wqe_pi_last = tmp_db;
         progressed = true;
@@ -1013,15 +1016,18 @@ static inline void priv_cpu_proxy_progress_dbr_assisted(struct doca_gpu_verbs_qp
     uint32_t tmp_db = 0;
     __be32 dbr_val;
 
-    tmp_db = (uint32_t)(reinterpret_cast<std::atomic<uint64_t>*>(qp->cpu_db)->load(std::memory_order_relaxed));
+    tmp_db = (uint32_t)(reinterpret_cast<std::atomic<uint64_t> *>(qp->cpu_db)
+                            ->load(std::memory_order_relaxed));
     if (tmp_db != qp->sq_wqe_pi_last) {
         struct doca_gpunetio_ib_mlx5_wqe_ctrl_seg ctrl_seg = {
             .opmod_idx_opcode = htobe32(tmp_db << 8), .qpn_ds = qp->sq_num_shift8_be};
 
         dbr_val = htobe32(tmp_db & 0xffff);
-        reinterpret_cast<std::atomic<uint32_t>*>(qp->sq_dbrec)->store(dbr_val, std::memory_order_relaxed);
+        reinterpret_cast<std::atomic<uint32_t> *>(qp->sq_dbrec)
+            ->store(dbr_val, std::memory_order_relaxed);
         std::atomic_thread_fence(std::memory_order_release);
-        reinterpret_cast<std::atomic<uint64_t>*>(qp->sq_db)->store(*reinterpret_cast<uint64_t*>(&ctrl_seg), std::memory_order_relaxed);
+        reinterpret_cast<std::atomic<uint64_t> *>(qp->sq_db)->store(
+            *reinterpret_cast<uint64_t *>(&ctrl_seg), std::memory_order_relaxed);
 
         qp->sq_wqe_pi_last = tmp_db;
     }
@@ -1033,10 +1039,12 @@ doca_error_t doca_gpu_verbs_cpu_proxy_progress(struct doca_gpu_verbs_qp *qp, boo
 
     if (qp->cpu_proxy != true) return DOCA_ERROR_NOT_SUPPORTED;
 
-    if (qp->send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED)
+    if ((qp->send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
+        (qp->qp_cpu->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY)) {
         priv_cpu_proxy_progress_dbr_assisted(qp);
-    else
+    } else {
         priv_cpu_proxy_progress_full_assisted(qp, &progressed);
+    }
 
     if (out_progressed) *out_progressed = progressed;
     return DOCA_SUCCESS;
@@ -1245,13 +1253,15 @@ doca_error_t doca_gpu_verbs_get_library_version(uint32_t *version) {
 }
 
 doca_error_t doca_gpu_verbs_check_device_code_compatibility(uint32_t device_code_version) {
-    if ((device_code_version < DOCA_GPUNETIO_MIN_COMPAT_DEVICE_CODE_VERSION)
-        || (device_code_version > DOCA_GPUNETIO_VERSION)) return DOCA_ERROR_NOT_SUPPORTED;
+    if ((device_code_version < DOCA_GPUNETIO_MIN_COMPAT_DEVICE_CODE_VERSION) ||
+        (device_code_version > DOCA_GPUNETIO_VERSION))
+        return DOCA_ERROR_NOT_SUPPORTED;
     return DOCA_SUCCESS;
 }
 
 doca_error_t doca_gpu_verbs_check_host_code_compatibility(uint32_t host_code_version) {
-    if ((host_code_version < DOCA_GPUNETIO_MIN_COMPAT_HOST_CODE_VERSION)
-        || (host_code_version > DOCA_GPUNETIO_VERSION)) return DOCA_ERROR_NOT_SUPPORTED;
+    if ((host_code_version < DOCA_GPUNETIO_MIN_COMPAT_HOST_CODE_VERSION) ||
+        (host_code_version > DOCA_GPUNETIO_VERSION))
+        return DOCA_ERROR_NOT_SUPPORTED;
     return DOCA_SUCCESS;
 }
