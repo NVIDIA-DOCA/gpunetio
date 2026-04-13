@@ -204,6 +204,7 @@ void doca_verbs_cq_open::create() {
 
         m_cq_buf = m_umem_buf;
         umem_id = m_umem_obj->umem_id;
+        dbr_umem_id = umem_id;
         m_db_buffer = reinterpret_cast<uint32_t *>(m_cq_buf + dbr_umem_offset);
     } else {
         /* Case of external umem */
