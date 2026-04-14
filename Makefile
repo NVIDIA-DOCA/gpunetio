@@ -91,8 +91,8 @@ LIBS := $(LIB_DIR)/$(LIB_BASENAME) $(LIB_DIR)/$(LIB_BASENAME).$(MAJOR_VER) $(LIB
 
 LIBSRCS := doca_verbs_dev.cpp doca_verbs_qp.cpp doca_verbs_cq.cpp doca_verbs_device_attr.cpp doca_verbs_umem.cpp doca_verbs_srq.cpp doca_verbs_uar.cpp doca_gpunetio.cpp doca_gpunetio_log.cpp doca_gpunetio_high_level.cpp doca_gpunetio_gdrcopy.cpp
 ifeq ($(USE_CUDA_WRAPPER), 1)
-LIBSRCS += doca_verbs_cuda_wrapper.cpp
-CXXFLAGS += -DDOCA_VERBS_USE_CUDA_WRAPPER
+LIBSRCS += doca_gpunetio_cuda_wrapper.cpp
+CXXFLAGS += -DDOCA_GPUNETIO_USE_CUDA_WRAPPER
 else
 LDFLAGS += -lcuda
 endif
