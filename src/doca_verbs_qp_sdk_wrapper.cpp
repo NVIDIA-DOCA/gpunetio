@@ -551,8 +551,7 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
         !p_doca_verbs_qp_init_attr_get_qp_context || !p_doca_verbs_qp_get_dbr_addr ||
         !p_doca_verbs_qp_get_uar_addr || !p_doca_verbs_qp_get_qpn ||
 
-        !p_doca_rdma_bridge_get_dev_pd || !p_doca_verbs_bridge_verbs_pd_import ||
-        !p_doca_verbs_bridge_verbs_context_import || !p_doca_log_backend_create_with_file_sdk) {
+        !p_doca_log_backend_create_with_file_sdk) {
         DOCA_LOG(LOG_ERR, "Failed to get all required DOCA Verbs Dev SDK symbols\n");
         dlclose(verbs_handle);
         verbs_handle = nullptr;
@@ -655,8 +654,6 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_init_attr_destroy(void *qp_in
 doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_init_attr_set_pd(void *qp_init_attr,
                                                                     doca_dev_t *net_dev) {
     doca_error_t doca_err;
-    struct ibv_pd *pd;
-    void *verbs_pd;
 
     if (net_dev == nullptr) {
         DOCA_LOG(LOG_ERR, "Can't set QP pd, net_dev is null", __func__);
@@ -671,19 +668,12 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_init_attr_set_pd(void *qp_ini
             return DOCA_SDK_WRAPPER_NOT_FOUND;
         }
 
-        doca_err = p_doca_rdma_bridge_get_dev_pd(net_dev->sdk, &pd);
-        if (doca_err != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
-            return DOCA_SDK_WRAPPER_API_ERROR;
+        if (net_dev->sdk_pd == nullptr || net_dev->sdk_context == nullptr) {
+            DOCA_LOG(LOG_ERR, "doca_dev_t has no SDK elements.");
+            return DOCA_SDK_WRAPPER_NOT_FOUND;
         }
 
-        doca_err = p_doca_verbs_bridge_verbs_pd_import(pd, &verbs_pd);
-        if (doca_err != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
-            return DOCA_SDK_WRAPPER_API_ERROR;
-        }
-
-        doca_err = p_doca_verbs_qp_init_attr_set_pd(qp_init_attr, verbs_pd);
+        doca_err = p_doca_verbs_qp_init_attr_set_pd(qp_init_attr, net_dev->sdk_pd);
         if (doca_err == DOCA_SUCCESS)
             return DOCA_SDK_WRAPPER_SUCCESS;
         else {
@@ -1485,8 +1475,6 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_ah_attr_create(doca_dev_t *net_d
                                                                void **ah_attr) {
     doca_error_t doca_err = DOCA_SUCCESS;
     const char *val = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
-    struct ibv_pd *pd;
-    void *verbs_context;
 
     if (net_dev == nullptr) {
         DOCA_LOG(LOG_ERR, "Can't create CQ, net_dev is null", __func__);
@@ -1507,19 +1495,12 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_ah_attr_create(doca_dev_t *net_d
             return DOCA_SDK_WRAPPER_NOT_FOUND;
         }
 
-        doca_err = p_doca_rdma_bridge_get_dev_pd(net_dev->sdk, &pd);
-        if (doca_err != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
-            return DOCA_SDK_WRAPPER_API_ERROR;
+        if (net_dev->sdk_context == nullptr) {
+            DOCA_LOG(LOG_ERR, "doca_dev_t has no SDK elements.");
+            return DOCA_SDK_WRAPPER_NOT_FOUND;
         }
 
-        doca_err = p_doca_verbs_bridge_verbs_context_import(pd->context, 0, &verbs_context);
-        if (doca_err != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
-            return DOCA_SDK_WRAPPER_API_ERROR;
-        }
-
-        doca_err = p_doca_verbs_ah_attr_create(verbs_context, ah_attr);
+        doca_err = p_doca_verbs_ah_attr_create(net_dev->sdk_context, ah_attr);
         if (doca_err == DOCA_SUCCESS) {
             DOCA_LOG(LOG_WARNING, "Env var DOCA_SDK_LIB_PATH set to %s. DOCA SDK is in use", val);
             return DOCA_SDK_WRAPPER_SUCCESS;
@@ -1700,8 +1681,6 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_create(doca_dev_t *net_dev,
                                                           void **verbs_qp) {
     doca_error_t doca_err = DOCA_SUCCESS;
     const char *val = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
-    struct ibv_pd *pd;
-    void *verbs_context;
 
     if (net_dev == nullptr) {
         DOCA_LOG(LOG_ERR, "Can't create qp, net_dev is null", __func__);
@@ -1727,25 +1706,18 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_create(doca_dev_t *net_dev,
             return DOCA_SDK_WRAPPER_NOT_FOUND;
         }
 
+        if (net_dev->sdk_pd == nullptr || net_dev->sdk_context == nullptr) {
+            DOCA_LOG(LOG_ERR, "doca_dev_t has no SDK elements.");
+            return DOCA_SDK_WRAPPER_NOT_FOUND;
+        }
+
         if (qp_init_attr->type != DOCA_VERBS_SDK_LIB_TYPE_SDK) {
             DOCA_LOG(LOG_ERR, "doca_verbs_qp_init_attr_t is not a SDK instance.");
             return DOCA_SDK_WRAPPER_NOT_FOUND;
         }
 
-        doca_err = p_doca_rdma_bridge_get_dev_pd(net_dev->sdk, &pd);
-        if (doca_err != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
-            return DOCA_SDK_WRAPPER_API_ERROR;
-        }
-
-        doca_err = p_doca_verbs_bridge_verbs_context_import(pd->context, 0, &verbs_context);
-        if (doca_err != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
-            return DOCA_SDK_WRAPPER_API_ERROR;
-        }
-
         /* According to library logic, if net_dev is SDK, then also GPU is SDK */
-        doca_err = p_doca_verbs_qp_create(verbs_context, qp_init_attr->sdk, verbs_qp);
+        doca_err = p_doca_verbs_qp_create(net_dev->sdk_context, qp_init_attr->sdk, verbs_qp);
         if (doca_err == DOCA_SUCCESS) {
             DOCA_LOG(LOG_WARNING, "Env var DOCA_SDK_LIB_PATH set to %s. DOCA SDK is in use", val);
             return DOCA_SDK_WRAPPER_SUCCESS;

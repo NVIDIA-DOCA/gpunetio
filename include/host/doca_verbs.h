@@ -91,6 +91,8 @@ typedef struct {
         void *sdk;
         struct doca_dev_open *open;
     };
+    void *sdk_pd;
+    void *sdk_context;
 } doca_dev_t;
 
 /**

@@ -57,8 +57,9 @@ extern "C" {
 #include "doca_sdk_wrapper.h"
 
 /* Wrapper function declarations */
-doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_dev_open_from_pd(struct ibv_pd *pd, void **dev);
-doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_dev_close(void *dev);
+doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_dev_open_from_pd(struct ibv_pd *pd,
+                                                                 doca_dev_t *net_dev);
+doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_dev_close(doca_dev_t *dev);
 
 #ifdef __cplusplus
 }

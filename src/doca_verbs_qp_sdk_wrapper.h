@@ -99,7 +99,8 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_init_attr_get_send_dbr_mode(
     void *qp_init_attr, enum doca_verbs_qp_send_dbr_mode *send_dbr_mode);
 doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_init_attr_set_ordering_semantic(
     void *qp_init_attr, enum doca_verbs_qp_ordering_semantic ordering_semantic);
-doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_init_attr_get_ordering_semantic(void *qp_init_attr, enum doca_verbs_qp_ordering_semantic *ordering_semantic);
+doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_init_attr_get_ordering_semantic(
+    void *qp_init_attr, enum doca_verbs_qp_ordering_semantic *ordering_semantic);
 
 doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_attr_create(void **qp_attr);
 doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_attr_destroy(void *qp_attr);

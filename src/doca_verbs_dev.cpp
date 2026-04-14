@@ -78,7 +78,7 @@ doca_error_t doca_verbs_dev_open(struct ibv_pd *verbs_pd, doca_dev_t **net_dev) 
     }
 
     /* Try with DOCA SDK first */
-    auto err = doca_verbs_sdk_wrapper_dev_open_from_pd(verbs_pd, &(net_dev_->sdk));
+    auto err = doca_verbs_sdk_wrapper_dev_open_from_pd(verbs_pd, net_dev_);
     if (err == DOCA_SDK_WRAPPER_SUCCESS) {
         DOCA_LOG(LOG_INFO, "Use DOCA Verbs Dev SDK", __func__);
         net_dev_->type = DOCA_VERBS_SDK_LIB_TYPE_SDK;
@@ -128,7 +128,7 @@ doca_error_t doca_verbs_dev_close(doca_dev_t *net_dev) {
     }
 
     if (net_dev->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
-        auto err = doca_verbs_sdk_wrapper_dev_close(net_dev->sdk);
+        auto err = doca_verbs_sdk_wrapper_dev_close(net_dev);
         if (err == DOCA_SDK_WRAPPER_SUCCESS) {
             net_dev->sdk = nullptr;
             goto exit;

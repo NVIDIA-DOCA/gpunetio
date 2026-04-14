@@ -77,8 +77,9 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
 __device__ static __forceinline__ void doca_gpu_dev_verbs_wait_until_slot_available(
     struct doca_gpu_dev_verbs_qp *qp, uint64_t wqe_idx) {
     const uint16_t nwqes = __ldg(&qp->sq_wqe_num);
-    [[likely]] if (wqe_idx >= nwqes) doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode, qp_type>(
-        &(qp->cq_sq), wqe_idx - nwqes);
+    [[likely]] if (wqe_idx >= nwqes)
+        doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode, qp_type>(&(qp->cq_sq),
+                                                                      wqe_idx - nwqes);
 }
 
 /**
@@ -583,7 +584,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_submit(
             doca_gpu_dev_verbs_submit_db_no_dbr<resource_sharing_mode, sync_scope, qp_type>(
                 qp, prod_index, code_opt);
         else
-            doca_gpu_dev_verbs_submit_proxy<resource_sharing_mode, sync_scope>(qp, prod_index, code_opt);
+            doca_gpu_dev_verbs_submit_proxy<resource_sharing_mode, sync_scope>(qp, prod_index,
+                                                                               code_opt);
     } else if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB) {
         doca_gpu_dev_verbs_submit_db<resource_sharing_mode, sync_scope, qp_type>(qp, prod_index,
                                                                                  code_opt);
@@ -591,7 +593,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_submit(
         doca_gpu_dev_verbs_submit_db_no_dbr<resource_sharing_mode, sync_scope, qp_type>(
             qp, prod_index, code_opt);
     } else {
-        doca_gpu_dev_verbs_submit_proxy<resource_sharing_mode, sync_scope>(qp, prod_index, code_opt);
+        doca_gpu_dev_verbs_submit_proxy<resource_sharing_mode, sync_scope>(qp, prod_index,
+                                                                           code_opt);
     }
 }
 

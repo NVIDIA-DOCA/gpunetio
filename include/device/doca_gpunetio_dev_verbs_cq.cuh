@@ -196,7 +196,8 @@ __device__ static __forceinline__ int doca_priv_gpu_dev_verbs_poll_cq_at(
 #if __CUDA_ARCH__ >= 900
     do {
         cqe_ci = doca_gpu_dev_verbs_load_relaxed<resource_sharing_mode>(&cq->cqe_ci);
-        [[unlikely]] if (cons_index < cqe_ci) return 0;
+        [[unlikely]] if (cons_index < cqe_ci)
+            return 0;
         opown = doca_gpu_dev_verbs_load_relaxed_sys_global((uint8_t *)&cqe64->op_own);
     } while ((cons_index >= cqe_ci + cqe_num) ||
              ((cqe_ci <= cons_index) &&
@@ -207,7 +208,8 @@ __device__ static __forceinline__ int doca_priv_gpu_dev_verbs_poll_cq_at(
 
     do {
         cqe_ci = doca_gpu_dev_verbs_load_relaxed<resource_sharing_mode>(&cq->cqe_ci);
-        [[unlikely]] if (cons_index < cqe_ci) return 0;
+        [[unlikely]] if (cons_index < cqe_ci)
+            return 0;
         cqe_chunk = doca_gpu_dev_verbs_load_relaxed_sys_global((uint32_t *)&cqe64->wqe_counter);
         cqe_chunk = doca_gpu_dev_verbs_bswap32(cqe_chunk);
         wqe_counter = cqe_chunk >> 16;
@@ -264,7 +266,8 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
 __device__ static __forceinline__ int doca_priv_gpu_dev_verbs_poll_cq_collapsed_at(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_cq *cq, uint64_t cons_index,
     uint64_t *new_cqe_ci) {
-    struct doca_gpunetio_ib_mlx5_cqe64 *cqe64 = (struct doca_gpunetio_ib_mlx5_cqe64 *)__ldg((uintptr_t *)&cq->cqe_daddr);
+    struct doca_gpunetio_ib_mlx5_cqe64 *cqe64 =
+        (struct doca_gpunetio_ib_mlx5_cqe64 *)__ldg((uintptr_t *)&cq->cqe_daddr);
     const uint32_t cqe_num = __ldg(&cq->cqe_num);
     uint8_t opown;
     uint8_t opcode;
@@ -275,13 +278,14 @@ __device__ static __forceinline__ int doca_priv_gpu_dev_verbs_poll_cq_collapsed_
     // If idx is a lot greater than cons_idx, we might get incorrect result due
     // to wqe_counter wraparound. We need to check prod_idx to be sure that idx
     // has already been submitted.
-    while (doca_gpu_dev_verbs_atomic_read<uint64_t, resource_sharing_mode>(
-               &qp->sq_wqe_pi) < cons_index);
+    while (doca_gpu_dev_verbs_atomic_read<uint64_t, resource_sharing_mode>(&qp->sq_wqe_pi) <
+           cons_index);
     doca_gpu_dev_verbs_fence_acquire<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU>();
 
     do {
         cqe_ci = doca_gpu_dev_verbs_load_relaxed<resource_sharing_mode>(&cq->cqe_ci);
-        [[unlikely]] if (cons_index < cqe_ci) return 0;
+        [[unlikely]] if (cons_index < cqe_ci)
+            return 0;
         cqe_chunk = doca_gpu_dev_verbs_load_relaxed_sys_global((uint32_t *)&cqe64->wqe_counter);
         cqe_chunk = doca_gpu_dev_verbs_bswap32(cqe_chunk);
         wqe_counter = cqe_chunk >> 16;
@@ -349,7 +353,8 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
           enum doca_gpu_dev_verbs_qp_type qp_type = DOCA_GPUNETIO_VERBS_QP_SQ>
 __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_cq(struct doca_gpu_dev_verbs_cq *cq,
                                                                  uint32_t count) {
-    [[unlikely]] if (count == 0) return 0;
+    [[unlikely]] if (count == 0)
+        return 0;
     uint64_t cons_index =
         doca_gpu_dev_verbs_load_relaxed<resource_sharing_mode>(&cq->cqe_ci) + count - 1;
     return doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode, qp_type>(cq, cons_index);

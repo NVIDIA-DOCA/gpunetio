@@ -34,6 +34,7 @@
 #include <sys/syslog.h>
 #include <mutex>
 #include <string.h>
+#include <infiniband/verbs.h>
 
 #include "doca_gpunetio_log.hpp"
 #include "doca_verbs_dev_sdk_wrapper.h"
@@ -45,10 +46,21 @@ extern "C" {
 /* Function pointer types for DOCA Verbs Dev SDK APIs */
 typedef doca_error_t (*doca_verbs_sdk_wrapper_dev_open_from_pd_t)(struct ibv_pd *pd, void **dev);
 typedef doca_error_t (*doca_verbs_sdk_wrapper_dev_close_t)(void *dev);
+typedef doca_error_t (*doca_verbs_bridge_verbs_pd_import_t)(struct ibv_pd *pd, void **verbs_pd);
+typedef doca_error_t (*doca_verbs_bridge_verbs_context_import_t)(struct ibv_context *ibv_ctx,
+                                                                 uint32_t flags,
+                                                                 void **verbs_context);
+typedef doca_error_t (*doca_verbs_pd_destroy_t)(void *verbs_pd);
+typedef doca_error_t (*doca_verbs_context_destroy_t)(void *verbs_context);
 
 /* Global function pointers */
 doca_verbs_sdk_wrapper_dev_open_from_pd_t p_doca_verbs_sdk_wrapper_dev_open_from_pd = nullptr;
 doca_verbs_sdk_wrapper_dev_close_t p_doca_verbs_dev_close = nullptr;
+
+static doca_verbs_bridge_verbs_pd_import_t p_doca_verbs_bridge_verbs_pd_import = nullptr;
+static doca_verbs_bridge_verbs_context_import_t p_doca_verbs_bridge_verbs_context_import = nullptr;
+static doca_verbs_pd_destroy_t p_doca_verbs_pd_destroy = nullptr;
+static doca_verbs_context_destroy_t p_doca_verbs_context_destroy = nullptr;
 
 static void *common_handle = nullptr;
 static void *verbs_handle = nullptr;
@@ -107,8 +119,21 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
     p_doca_verbs_dev_close =
         (doca_verbs_sdk_wrapper_dev_close_t)get_verbs_sdk_symbol("doca_dev_close");
 
+    p_doca_verbs_bridge_verbs_pd_import = (doca_verbs_bridge_verbs_pd_import_t)get_verbs_sdk_symbol(
+        "doca_verbs_bridge_verbs_pd_import");
+    p_doca_verbs_bridge_verbs_context_import =
+        (doca_verbs_bridge_verbs_context_import_t)get_verbs_sdk_symbol(
+            "doca_verbs_bridge_verbs_context_import");
+
+    p_doca_verbs_pd_destroy =
+        (doca_verbs_pd_destroy_t)get_verbs_sdk_symbol("doca_verbs_pd_destroy");
+    p_doca_verbs_context_destroy =
+        (doca_verbs_context_destroy_t)get_verbs_sdk_symbol("doca_verbs_context_destroy");
+
     /* Check if all symbols were found */
-    if (!p_doca_verbs_sdk_wrapper_dev_open_from_pd || !p_doca_verbs_dev_close) {
+    if (!p_doca_verbs_sdk_wrapper_dev_open_from_pd || !p_doca_verbs_dev_close ||
+        !p_doca_verbs_bridge_verbs_pd_import || !p_doca_verbs_bridge_verbs_context_import ||
+        !p_doca_verbs_pd_destroy || !p_doca_verbs_context_destroy) {
         DOCA_LOG(LOG_ERR, "Failed to get all required DOCA Verbs Dev SDK symbols\n");
         dlclose(verbs_handle);
         verbs_handle = nullptr;
@@ -145,7 +170,8 @@ static int get_sdk_wrapper_env_var(void) {
 }
 
 /* Wrapper function implementations */
-doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_dev_open_from_pd(struct ibv_pd *pd, void **dev) {
+doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_dev_open_from_pd(struct ibv_pd *pd,
+                                                                 doca_dev_t *net_dev) {
     doca_error_t doca_err;
     const char *val = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
 
@@ -158,10 +184,25 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_dev_open_from_pd(struct ibv_pd *
             return DOCA_SDK_WRAPPER_NOT_FOUND;
         }
 
-        doca_err = p_doca_verbs_sdk_wrapper_dev_open_from_pd(
-            pd, dev);  // doca_rdma_bridge_open_dev_from_pd
+        doca_err = p_doca_verbs_sdk_wrapper_dev_open_from_pd(pd, &(net_dev->sdk));
         if (doca_err == DOCA_SUCCESS) {
             DOCA_LOG(LOG_WARNING, "Env var DOCA_SDK_LIB_PATH set to %s. DOCA SDK is in use", val);
+
+            doca_err = p_doca_verbs_bridge_verbs_pd_import(pd, &net_dev->sdk_pd);
+            if (doca_err != DOCA_SUCCESS) {
+                DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
+                p_doca_verbs_dev_close(net_dev->sdk);
+                return DOCA_SDK_WRAPPER_API_ERROR;
+            }
+
+            doca_err =
+                p_doca_verbs_bridge_verbs_context_import(pd->context, 0, &net_dev->sdk_context);
+            if (doca_err != DOCA_SUCCESS) {
+                DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
+                p_doca_verbs_pd_destroy(net_dev->sdk_pd);
+                p_doca_verbs_dev_close(net_dev->sdk);
+                return DOCA_SDK_WRAPPER_API_ERROR;
+            }
             return DOCA_SDK_WRAPPER_SUCCESS;
         } else {
             DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
@@ -173,13 +214,31 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_dev_open_from_pd(struct ibv_pd *
     }
 }
 
-doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_dev_close(void *dev) {
+doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_dev_close(doca_dev_t *net_dev) {
     doca_error_t doca_err;
 
     if (get_sdk_wrapper_env_var() > 0) {
         if (init_verbs_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
 
-        doca_err = p_doca_verbs_dev_close(dev);
+        if (net_dev->type != DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+            DOCA_LOG(LOG_ERR, "doca_dev_t is not a SDK instance.");
+            return DOCA_SDK_WRAPPER_NOT_FOUND;
+        }
+
+        if (net_dev->sdk_pd == nullptr || net_dev->sdk_context == nullptr) {
+            DOCA_LOG(LOG_ERR, "doca_dev_t has no SDK elements.");
+            return DOCA_SDK_WRAPPER_NOT_FOUND;
+        }
+
+        doca_err = p_doca_verbs_pd_destroy(net_dev->sdk_pd);
+        if (doca_err != DOCA_SUCCESS)
+            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
+
+        doca_err = p_doca_verbs_context_destroy(net_dev->sdk_context);
+        if (doca_err != DOCA_SUCCESS)
+            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
+
+        doca_err = p_doca_verbs_dev_close(net_dev->sdk);
         if (doca_err == DOCA_SUCCESS)
             return DOCA_SDK_WRAPPER_SUCCESS;
         else {

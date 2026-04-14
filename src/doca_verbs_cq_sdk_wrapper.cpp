@@ -64,9 +64,6 @@ typedef void (*doca_verbs_cq_get_dbr_addr_t)(void *verbs_cq, uint64_t **uar_db_r
                                              uint32_t **ci_dbr, uint32_t **arm_dbr);
 typedef uint32_t (*doca_verbs_cq_get_cqn_t)(const void *verbs_cq);
 typedef doca_error_t (*doca_rdma_bridge_get_dev_pd_t)(void *dev, struct ibv_pd **pd);
-typedef doca_error_t (*doca_verbs_bridge_verbs_context_import_t)(struct ibv_context *ibv_ctx,
-                                                                 uint32_t flags,
-                                                                 void **verbs_context);
 
 /* Global function pointers */
 static doca_verbs_cq_attr_create_t p_doca_verbs_cq_attr_create = nullptr;
@@ -84,8 +81,6 @@ static doca_verbs_cq_destroy_t p_doca_verbs_cq_destroy = nullptr;
 static doca_verbs_cq_get_wq_t p_doca_verbs_cq_get_wq = nullptr;
 static doca_verbs_cq_get_dbr_addr_t p_doca_verbs_cq_get_dbr_addr = nullptr;
 static doca_verbs_cq_get_cqn_t p_doca_verbs_cq_get_cqn = nullptr;
-static doca_rdma_bridge_get_dev_pd_t p_doca_rdma_bridge_get_dev_pd = nullptr;
-static doca_verbs_bridge_verbs_context_import_t p_doca_verbs_bridge_verbs_context_import = nullptr;
 
 static void *common_handle = nullptr;
 static void *verbs_handle = nullptr;
@@ -93,15 +88,6 @@ static void *verbs_handle = nullptr;
 /* Helper function to get function pointer from libcuda */
 static void *get_verbs_sdk_symbol(const char *symbol_name) {
     void *symbol = dlsym(verbs_handle, symbol_name);
-    if (!symbol) {
-        DOCA_LOG(LOG_ERR, "Failed to get symbol %s: %s\n", symbol_name, dlerror());
-        return nullptr;
-    }
-    return symbol;
-}
-
-static void *get_common_sdk_symbol(const char *symbol_name) {
-    void *symbol = dlsym(common_handle, symbol_name);
     if (!symbol) {
         DOCA_LOG(LOG_ERR, "Failed to get symbol %s: %s\n", symbol_name, dlerror());
         return nullptr;
@@ -177,11 +163,6 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
         (doca_verbs_cq_get_dbr_addr_t)get_verbs_sdk_symbol("doca_verbs_cq_get_dbr_addr");
     p_doca_verbs_cq_get_cqn =
         (doca_verbs_cq_get_cqn_t)get_verbs_sdk_symbol("doca_verbs_cq_get_cqn");
-    p_doca_rdma_bridge_get_dev_pd =
-        (doca_rdma_bridge_get_dev_pd_t)get_common_sdk_symbol("doca_rdma_bridge_get_dev_pd");
-    p_doca_verbs_bridge_verbs_context_import =
-        (doca_verbs_bridge_verbs_context_import_t)get_verbs_sdk_symbol(
-            "doca_verbs_bridge_verbs_context_import");
 
     /* Check if all symbols were found */
     if (!p_doca_verbs_cq_attr_destroy || !p_doca_verbs_cq_attr_create ||
@@ -190,8 +171,7 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
         !p_doca_verbs_cq_attr_set_external_uar || !p_doca_verbs_cq_attr_set_cq_overrun ||
         !p_doca_verbs_cq_attr_set_cq_collapsed || !p_doca_verbs_cq_create ||
         !p_doca_verbs_cq_destroy || !p_doca_verbs_cq_get_wq || !p_doca_verbs_cq_get_dbr_addr ||
-        !p_doca_verbs_cq_get_cqn || !p_doca_rdma_bridge_get_dev_pd ||
-        !p_doca_verbs_bridge_verbs_context_import) {
+        !p_doca_verbs_cq_get_cqn) {
         DOCA_LOG(LOG_ERR, "Failed to get all required DOCA Verbs Dev SDK symbols\n");
         dlclose(verbs_handle);
         verbs_handle = nullptr;
@@ -404,8 +384,6 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_cq_create(doca_dev_t *net_dev,
                                                           void **verbs_cq) {
     doca_error_t doca_err = DOCA_SUCCESS;
     const char *val = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
-    struct ibv_pd *pd;
-    void *verbs_context;
 
     if (net_dev == nullptr) {
         DOCA_LOG(LOG_ERR, "Can't create CQ, net_dev is null", __func__);
@@ -431,20 +409,8 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_cq_create(doca_dev_t *net_dev,
             return DOCA_SDK_WRAPPER_NOT_FOUND;
         }
 
-        doca_err = p_doca_rdma_bridge_get_dev_pd(net_dev->sdk, &pd);
-        if (doca_err != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
-            return DOCA_SDK_WRAPPER_API_ERROR;
-        }
-
-        doca_err = p_doca_verbs_bridge_verbs_context_import(pd->context, 0, &verbs_context);
-        if (doca_err != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
-            return DOCA_SDK_WRAPPER_API_ERROR;
-        }
-
         /* According to library logic, if net_dev is SDK, then also GPU is SDK */
-        doca_err = p_doca_verbs_cq_create(verbs_context, cq_attr->sdk, verbs_cq);
+        doca_err = p_doca_verbs_cq_create(net_dev->sdk_context, cq_attr->sdk, verbs_cq);
         if (doca_err == DOCA_SUCCESS) {
             DOCA_LOG(LOG_WARNING, "Env var DOCA_SDK_LIB_PATH set to %s. DOCA SDK is in use", val);
             return DOCA_SDK_WRAPPER_SUCCESS;

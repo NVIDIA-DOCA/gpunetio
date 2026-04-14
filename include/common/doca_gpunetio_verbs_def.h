@@ -341,8 +341,9 @@ enum doca_gpu_dev_verbs_gpu_code_opt {
     DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_SKIP_AVAILABILITY_CHECK =
         (1 << 1),                                                 ///< Skip availability check
     DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_SKIP_DB_RINGING = (1 << 2),  ///< Skip DB ringing
-    DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_CPU_PROXY_UPDATE_PI = (1 << 3),  ///< in case of CPU proxy, update producer index
-    DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_MAX = INT_MAX                ///< Sentinel value
+    DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_CPU_PROXY_UPDATE_PI =
+        (1 << 3),                                   ///< in case of CPU proxy, update producer index
+    DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_MAX = INT_MAX  ///< Sentinel value
 };
 
 enum doca_gpu_dev_verbs_signal_op {

@@ -569,10 +569,11 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_thread(
     num_chunks = num_chunks > 0 ? num_chunks : 1;
 
     if (mcst_mode == DOCA_GPUNETIO_VERBS_MCST_ENABLED)
-        base_wqe_idx =
-            doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, num_chunks + 1, code_opt);
+        base_wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(
+            qp, num_chunks + 1, code_opt);
     else
-        base_wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, num_chunks, code_opt);
+        base_wqe_idx =
+            doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, num_chunks, code_opt);
 
 #pragma unroll 1
     for (uint64_t i = 0; i < num_chunks; i++) {
@@ -766,7 +767,6 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
 __device__ static __forceinline__ void doca_gpu_dev_verbs_mcst(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr daddr,
     doca_gpu_dev_verbs_ticket_t *out_ticket) {
-
     DOCA_GPUNETIO_VERBS_ASSERT(qp != NULL);
     DOCA_GPUNETIO_VERBS_ASSERT(out_ticket != NULL);
 
@@ -797,7 +797,6 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
 __device__ static __forceinline__ void doca_priv_gpu_dev_verbs_get_wait(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr daddr,
     doca_gpu_dev_verbs_ticket_t ticket) {
-
     if (mcst_mode == DOCA_GPUNETIO_VERBS_MCST_ENABLED) {
         uint64_t wqe_idx = 0;
         uint64_t new_ticket;
