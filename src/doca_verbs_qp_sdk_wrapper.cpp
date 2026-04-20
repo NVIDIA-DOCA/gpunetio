@@ -511,6 +511,11 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
             "doca_log_backend_create_with_file_sdk");
 
     /* Check if all symbols were found */
+    /*
+     * Symbols p_doca_verbs_qp_init_attr_set_send_dbr_mode and
+     * p_doca_verbs_qp_init_attr_get_send_dbr_mode are optional as not present in DOCA 3.2 LTS
+     * version.
+     */
     if (!p_doca_verbs_qp_init_attr_create || !p_doca_verbs_qp_init_attr_destroy ||
         !p_doca_verbs_qp_init_attr_set_pd || !p_doca_verbs_qp_init_attr_set_send_cq ||
         !p_doca_verbs_qp_init_attr_set_receive_cq || !p_doca_verbs_qp_init_attr_set_sq_sig_all ||
@@ -526,13 +531,11 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
         !p_doca_verbs_qp_init_attr_set_external_uar ||
         !p_doca_verbs_qp_init_attr_get_external_uar || !p_doca_verbs_qp_init_attr_set_qp_context ||
         !p_doca_verbs_qp_init_attr_set_srq || !p_doca_verbs_qp_init_attr_set_core_direct_master ||
-        !p_doca_verbs_qp_init_attr_set_send_dbr_mode ||
-        !p_doca_verbs_qp_init_attr_get_send_dbr_mode || !p_doca_verbs_qp_attr_create ||
-        !p_doca_verbs_qp_attr_destroy || !p_doca_verbs_qp_attr_set_next_state ||
-        !p_doca_verbs_qp_attr_set_current_state || !p_doca_verbs_qp_attr_get_current_state ||
-        !p_doca_verbs_qp_attr_set_path_mtu || !p_doca_verbs_qp_attr_set_rq_psn ||
-        !p_doca_verbs_qp_attr_set_sq_psn || !p_doca_verbs_qp_attr_set_dest_qp_num ||
-        !p_doca_verbs_qp_attr_set_allow_remote_write ||
+        !p_doca_verbs_qp_attr_create || !p_doca_verbs_qp_attr_destroy ||
+        !p_doca_verbs_qp_attr_set_next_state || !p_doca_verbs_qp_attr_set_current_state ||
+        !p_doca_verbs_qp_attr_get_current_state || !p_doca_verbs_qp_attr_set_path_mtu ||
+        !p_doca_verbs_qp_attr_set_rq_psn || !p_doca_verbs_qp_attr_set_sq_psn ||
+        !p_doca_verbs_qp_attr_set_dest_qp_num || !p_doca_verbs_qp_attr_set_allow_remote_write ||
         !p_doca_verbs_qp_attr_set_allow_remote_read || !p_doca_verbs_qp_attr_set_atomic_mode ||
         !p_doca_verbs_qp_attr_set_ah_attr || !p_doca_verbs_qp_attr_set_pkey_index ||
         !p_doca_verbs_qp_attr_set_port_num || !p_doca_verbs_qp_attr_set_ack_timeout ||
@@ -1020,6 +1023,8 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_init_attr_set_send_dbr_mode(
     if (get_sdk_wrapper_env_var() > 0) {
         if (init_verbs_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
 
+        if (!p_doca_verbs_qp_init_attr_set_send_dbr_mode) return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+
         doca_err = p_doca_verbs_qp_init_attr_set_send_dbr_mode(qp_init_attr, send_dbr_mode);
         if (doca_err == DOCA_SUCCESS)
             return DOCA_SDK_WRAPPER_SUCCESS;
@@ -1035,6 +1040,8 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_init_attr_get_send_dbr_mode(
     void *qp_init_attr, enum doca_verbs_qp_send_dbr_mode *send_dbr_mode) {
     if (get_sdk_wrapper_env_var() > 0) {
         if (init_verbs_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
+
+        if (!p_doca_verbs_qp_init_attr_get_send_dbr_mode) return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
 
         *send_dbr_mode = p_doca_verbs_qp_init_attr_get_send_dbr_mode(qp_init_attr);
         return DOCA_SDK_WRAPPER_SUCCESS;

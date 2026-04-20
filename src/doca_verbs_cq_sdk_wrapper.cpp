@@ -164,14 +164,17 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
     p_doca_verbs_cq_get_cqn =
         (doca_verbs_cq_get_cqn_t)get_verbs_sdk_symbol("doca_verbs_cq_get_cqn");
 
-    /* Check if all symbols were found */
+    /*
+     * Check if all symbols were found.
+     * Symbol p_doca_verbs_cq_attr_set_cq_collapsed is optional as not present in DOCA 3.2 LTS
+     * version.
+     */
     if (!p_doca_verbs_cq_attr_destroy || !p_doca_verbs_cq_attr_create ||
         !p_doca_verbs_cq_attr_set_cq_size || !p_doca_verbs_cq_attr_set_cq_context ||
         !p_doca_verbs_cq_attr_set_external_datapath_en || !p_doca_verbs_cq_attr_set_external_umem ||
         !p_doca_verbs_cq_attr_set_external_uar || !p_doca_verbs_cq_attr_set_cq_overrun ||
-        !p_doca_verbs_cq_attr_set_cq_collapsed || !p_doca_verbs_cq_create ||
-        !p_doca_verbs_cq_destroy || !p_doca_verbs_cq_get_wq || !p_doca_verbs_cq_get_dbr_addr ||
-        !p_doca_verbs_cq_get_cqn) {
+        !p_doca_verbs_cq_create || !p_doca_verbs_cq_destroy || !p_doca_verbs_cq_get_wq ||
+        !p_doca_verbs_cq_get_dbr_addr || !p_doca_verbs_cq_get_cqn) {
         DOCA_LOG(LOG_ERR, "Failed to get all required DOCA Verbs Dev SDK symbols\n");
         dlclose(verbs_handle);
         verbs_handle = nullptr;
@@ -367,6 +370,8 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_cq_attr_set_cq_collapsed(void *c
 
     if (get_sdk_wrapper_env_var() > 0) {
         if (init_verbs_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
+
+        if (!p_doca_verbs_cq_attr_set_cq_collapsed) return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
 
         doca_err = p_doca_verbs_cq_attr_set_cq_collapsed(cq_attr, cc);
         if (doca_err == DOCA_SUCCESS)
