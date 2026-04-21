@@ -124,6 +124,14 @@ extern "C" {
 #define DOCA_GPUNETIO_VERBS_MKEY_SWAPPED 1
 
 /**
+ * On NVIDIA NICs, we can violate the memory model using a lighter
+ * fence acquire in poll_cq* functions. Set to 1 by default.
+ */
+#ifndef DOCA_GPUNETIO_VERBS_EXP_NIC_FENCE_ACQUIRE_CTA
+#define DOCA_GPUNETIO_VERBS_EXP_NIC_FENCE_ACQUIRE_CTA 1
+#endif
+
+/**
  * Enable debug prints in this headerfile.
  * Bad for performance, should be used only for debugging
  */

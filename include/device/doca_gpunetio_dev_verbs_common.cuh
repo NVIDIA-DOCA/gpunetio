@@ -162,6 +162,14 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_fence_acquire() {
 #endif
 }
 
+__device__ static __forceinline__ void doca_gpu_dev_verbs_fence_acquire_nvidia_nic() {
+#if DOCA_GPUNETIO_VERBS_EXP_NIC_FENCE_ACQUIRE_CTA == 1
+    doca_gpu_dev_verbs_fence_acquire<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_CTA>();
+#else
+    doca_gpu_dev_verbs_fence_acquire<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_SYS>();
+#endif
+}
+
 template <enum doca_gpu_dev_verbs_sync_scope sync_scope>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_fence_release() {
 #ifdef DOCA_GPUNETIO_VERBS_HAS_FENCE_ACQUIRE_RELEASE_PTX

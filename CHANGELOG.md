@@ -9,6 +9,7 @@
 - If the environment variable `DOCA_SDK_LIB_PATH` is not set or points to an invalid DOCA SDK library installation directory, GPUNetIO open uses the standalone open-source implementation for all CPU functions. In this case, DOCA SDK closed-source features cannot be used.
 - N.B. It is the users’ responsibility to properly install the [DOCA SDK](https://developer.nvidia.com/doca-downloads) on the system if restricted features are required (e.g., ordering semantic).
 - The transition from open to SDK mode breaks backward compatibility of CPU functions, because function signatures and data structure types had to be updated. Since backward compatibility is broken, the GPUNetIO open version has been bumped to 3.0.0.
+- New device function `doca_gpu_dev_verbs_fence_acquire_nvidia_nic` to enable a lighter fence acquire wuen polling CQEs
 
 ### Changed
 
