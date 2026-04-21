@@ -74,7 +74,7 @@ doca_verbs_umem_open::doca_verbs_umem_open(struct ibv_context *ibv_ctx, void *ad
 
 doca_verbs_umem_open::~doca_verbs_umem_open() { static_cast<void>(destroy()); }
 
-void doca_verbs_umem::create() {
+void doca_verbs_umem_open::create() {
     doca_error_t umem_status;
 
 #if DOCA_GPUNETIO_HAVE_MLX5DV_UMEM_DMABUF == 1
@@ -89,24 +89,26 @@ void doca_verbs_umem::create() {
         umem_in.addr = reinterpret_cast<void *>(m_dmabuf_offset);
         umem_in.size = m_size;
 
-        umem_status = doca_verbs_wrapper_mlx5dv_devx_umem_reg_ex(m_ibv_ctx, &umem_in, &m_umem_obj);
+        umem_status = doca_verbs_wrapper_mlx5dv_devx_umem_reg_ex(m_ibv_ctx, &umem_in, &m_umem);
         if (umem_status != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR,
-                     "Failed to create UMEM, m_address %p m_size %zd m_access_flags %x m_dmabuf_fd %d "
-                     "m_dmabuf_offset %zd err %d",
-                     m_address, m_size, m_access_flags, m_dmabuf_fd, m_dmabuf_offset, errno);
+            DOCA_LOG(
+                LOG_ERR,
+                "Failed to create UMEM, m_address %p m_size %zd m_access_flags %x m_dmabuf_fd %d "
+                "m_dmabuf_offset %zd err %d",
+                m_address, m_size, m_access_flags, m_dmabuf_fd, m_dmabuf_offset, errno);
             throw umem_status;
         }
     } else
 #endif
     {
         umem_status = doca_verbs_wrapper_mlx5dv_devx_umem_reg(m_ibv_ctx, m_address, m_size,
-                                                               m_access_flags, &m_umem_obj);
+                                                              m_access_flags, &m_umem);
         if (umem_status != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR,
-                     "Failed to create UMEM, m_address %p m_size %zd m_access_flags %x m_dmabuf_fd %d "
-                     "m_dmabuf_offset %zd err %d",
-                     m_address, m_size, m_access_flags, m_dmabuf_fd, m_dmabuf_offset, errno);
+            DOCA_LOG(
+                LOG_ERR,
+                "Failed to create UMEM, m_address %p m_size %zd m_access_flags %x m_dmabuf_fd %d "
+                "m_dmabuf_offset %zd err %d",
+                m_address, m_size, m_access_flags, m_dmabuf_fd, m_dmabuf_offset, errno);
             throw umem_status;
         }
     }
