@@ -804,7 +804,7 @@ doca_error_t doca_verbs_qp_open::rst2init(struct doca_verbs_qp_attr_open *verbs_
     DEVX_SET(rst2init_qp_in, &in, qpn, m_qp_num);
     DEVX_SET(qpc, qpc, primary_address_path.vhca_port_num, verbs_qp_attr->port_num);
     DEVX_SET(qpc, qpc, pm_state, MLX5_QPC_PM_STATE_MIGRATED);
-    // DEVX_SET(qpc, qpc, counter_set_id, 0x0);  // Not connected to a counter set
+    DEVX_SET(qpc, qpc, counter_set_id, verbs_qp_attr->counter_set_id);
     DEVX_SET(qpc, qpc, primary_address_path.pkey_index, verbs_qp_attr->pkey_index);
 
     if (verbs_qp_attr->allow_remote_write == 1) {
@@ -1250,6 +1250,7 @@ doca_error_t doca_verbs_qp_open::query_qp(
     verbs_qp_attr->pkey_index = DEVX_GET(qpc, qpc, primary_address_path.pkey_index);
     verbs_qp_attr->port_num = DEVX_GET(qpc, qpc, primary_address_path.vhca_port_num);
     verbs_qp_attr->ack_timeout = DEVX_GET(qpc, qpc, primary_address_path.ack_timeout);
+    verbs_qp_attr->counter_set_id = DEVX_GET(qpc, qpc, counter_set_id);
     verbs_qp_attr->retry_cnt = DEVX_GET(qpc, qpc, retry_count);
     verbs_qp_attr->rnr_retry = DEVX_GET(qpc, qpc, rnr_retry);
     verbs_qp_attr->min_rnr_timer = DEVX_GET(qpc, qpc, min_rnr_nak);
@@ -2988,6 +2989,28 @@ doca_error_t doca_verbs_qp_attr_set_max_dest_rd_atomic(doca_verbs_qp_attr_t *qp_
     }
 
     qp_attr->open->max_dest_rd_atomic = max_dest_rd_atomic;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_qp_attr_set_counter_set_id(doca_verbs_qp_attr_t *qp_attr,
+                                                   uint32_t counter_set_id) {
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set counter_set_id: parameter qp_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        DOCA_LOG(LOG_ERR, "DOCA SDK doesn't support this function", __func__);
+        return DOCA_ERROR_NOT_SUPPORTED;
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->counter_set_id = counter_set_id;
 
     return DOCA_SUCCESS;
 }

@@ -1235,6 +1235,24 @@ doca_error_t doca_verbs_qp_attr_set_max_rd_atomic(doca_verbs_qp_attr_t *qp_attr,
  */
 doca_error_t doca_verbs_qp_attr_set_max_dest_rd_atomic(doca_verbs_qp_attr_t *qp_attr,
                                                        uint8_t max_dest_rd_atomic);
+
+/**
+ * @brief Set counter_set_id attribute for verbs_qp_attr
+ *
+ * @param [in] verbs_qp_attr
+ * Pointer to verbs_qp_attr instance.
+ * @param [in] counter_set_id
+ * counter_set_id attribute.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ * - DOCA_ERROR_NOT_SUPPORTED - if called in SDK mode.
+ */
+doca_error_t doca_verbs_qp_attr_set_counter_set_id(doca_verbs_qp_attr_t *qp_attr,
+                                                   uint32_t counter_set_id);
+
 /**
  * @brief Create a DOCA Verbs AH instance.
  *

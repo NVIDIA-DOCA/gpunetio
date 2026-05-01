@@ -256,6 +256,7 @@ doca_error_t doca_gpu_mem_alloc(doca_gpu_t *gpu_dev, size_t size, size_t alignme
     unsigned int flag = 1;
     const char *err_string;
     void *memptr_cpu_ = nullptr;
+    void *memptr_cpu_orig_ = 0;
     doca_error_t status = DOCA_SUCCESS;
     doca_sdk_wrapper_error_t err;
 
@@ -427,33 +428,40 @@ doca_error_t doca_gpu_mem_alloc(doca_gpu_t *gpu_dev, size_t size, size_t alignme
         }
 
     } else if (mtype == DOCA_GPU_MEM_TYPE_CPU_GPU) {
-        mentry->size_orig = mentry->size;
+        mentry->size_orig = mentry->size + alignment;
 
-        memptr_cpu_ = (uint8_t *)calloc(alignment, mentry->size_orig);
-        if (memptr_cpu_ == nullptr) {
+        memptr_cpu_orig_ = (uint8_t *)calloc(mentry->size_orig, 1);
+        if (memptr_cpu_orig_ == nullptr) {
             DOCA_LOG(LOG_ERR, "Failed to allocate CPU memory.");
             status = DOCA_ERROR_DRIVER;
             goto error;
         }
 
+        /* Align memory address */
+        memptr_cpu_ = memptr_cpu_orig_;
+        if (alignment && ((uintptr_t)memptr_cpu_) % alignment)
+            memptr_cpu_ = (void *)((uintptr_t)memptr_cpu_ +
+                                   (alignment - (((uintptr_t)memptr_cpu_) % alignment)));
+
         res = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaHostRegister(
-            memptr_cpu_, mentry->size_orig, cudaHostRegisterPortable | cudaHostRegisterMapped));
+            memptr_cpu_, mentry->size, cudaHostRegisterPortable | cudaHostRegisterMapped));
         if (res != cudaSuccess) {
             DOCA_LOG(LOG_ERR, "Could register CPU memory to CUDA %lx, err %d",
                      (uintptr_t)memptr_cpu_, res);
-            free(memptr_cpu_);
+            free(memptr_cpu_orig_);
             status = DOCA_ERROR_DRIVER;
             goto error;
         }
 
-        mentry->base_addr = (uintptr_t)memptr_cpu_;
+        mentry->base_addr = (uintptr_t)memptr_cpu_orig_;
 
         res = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
             cudaHostGetDevicePointer(&cudev_memptr_gpu_, memptr_cpu_, 0));
         if (res != cudaSuccess) {
             DOCA_LOG(LOG_ERR, "Could get GPU device ptr for CPU memory %lx, err %d",
                      (uintptr_t)memptr_cpu_, res);
-            free(memptr_cpu_);
+            cudaHostUnregister(memptr_cpu_);
+            free(memptr_cpu_orig_);
             status = DOCA_ERROR_DRIVER;
             goto error;
         }
@@ -534,9 +542,11 @@ doca_error_t doca_gpu_mem_free(doca_gpu_t *gpu_dev, void *memptr_gpu) {
                                              mentry->size);
         DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaFree((void *)mentry->base_addr));
     } else {
-        res_cuda = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaHostUnregister((void *)mentry->base_addr));
+        res_cuda =
+            DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaHostUnregister((void *)mentry->align_addr_cpu));
         if (res_cuda != cudaSuccess)
-            DOCA_LOG(LOG_ERR, "Error unregistering GPU memory at %p", (void *)mentry->base_addr);
+            DOCA_LOG(LOG_ERR, "Error unregistering GPU memory at %p",
+                     (void *)mentry->align_addr_cpu);
         free((void *)mentry->base_addr);
     }
 

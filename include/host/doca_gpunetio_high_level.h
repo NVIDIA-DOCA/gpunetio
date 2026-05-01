@@ -61,7 +61,8 @@ struct doca_gpu_verbs_qp_init_attr_hl {
     enum doca_gpu_verbs_mem_reg_type mreg_type;
     enum doca_gpu_verbs_send_dbr_mode_ext send_dbr_mode_ext;
     bool cq_collapsed;
-    uint8_t reserved2[3];
+    bool enable_umem_cpu;
+    uint8_t reserved2[2];
     enum doca_verbs_qp_ordering_semantic ordering_semantic;
     uint8_t reserved3[12];
 } __attribute__((__aligned__(8))) __attribute__((__packed__));

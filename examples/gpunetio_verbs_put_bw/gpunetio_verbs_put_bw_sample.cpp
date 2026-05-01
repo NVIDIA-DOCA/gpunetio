@@ -230,6 +230,7 @@ doca_error_t verbs_server(struct verbs_config *cfg) {
     resources.conn_socket = -1;
     resources.num_iters = cfg->num_iters;
     resources.cuda_threads = cfg->cuda_threads;
+    resources.enable_umem_cpu = false;
 
     status = create_verbs_resources(cfg, &resources);
     if (status != DOCA_SUCCESS) {
@@ -303,6 +304,7 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
     resources.cuda_threads = cfg->cuda_threads;
     resources.nic_handler = cfg->nic_handler;
     resources.scope = (enum doca_gpu_dev_verbs_exec_scope)cfg->exec_scope;
+    resources.enable_umem_cpu = false;
 
     status = create_verbs_resources(cfg, &resources);
     if (status != DOCA_SUCCESS) {

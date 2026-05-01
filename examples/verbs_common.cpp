@@ -324,6 +324,7 @@ doca_error_t create_verbs_resources(struct verbs_config *cfg, struct verbs_resou
     qp_init.send_dbr_mode_ext = resources->send_dbr_mode_ext;
     qp_init.cq_collapsed = resources->cq_collapsed;
     qp_init.ordering_semantic = DOCA_VERBS_QP_ORDERING_SEMANTIC_IBTA;
+    qp_init.enable_umem_cpu = resources->enable_umem_cpu;
 
     status = doca_gpu_verbs_create_qp_hl(&qp_init, &(resources->qp));
     if (status != DOCA_SUCCESS) {
