@@ -80,6 +80,14 @@ typedef enum doca_error {
     DOCA_ERROR_DEVICE_FATAL_ERROR = 31 /**< Device experienced a fatal error */
 } doca_error_t;
 
+typedef enum {
+    DOCA_SDK_WRAPPER_SUCCESS = 0,          /**< Success */
+    DOCA_SDK_WRAPPER_NOT_FOUND = 1,        /**< DOCA SDK wrapper not found */
+    DOCA_SDK_WRAPPER_NOT_SUPPORTED = 2,    /**< DOCA SDK function not found */
+    DOCA_SDK_WRAPPER_API_ERROR = 3,        /**< DOCA SDK error */
+    DOCA_SDK_WRAPPER_API_INVALID_VALUE = 4 /**< Invalid input */
+} doca_sdk_wrapper_error_t;
+
 #ifdef __cplusplus
 }
 #endif

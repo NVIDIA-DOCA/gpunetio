@@ -36,11 +36,12 @@
 #include <stdlib.h>
 
 #include "host/doca_verbs.h"
+#include "doca_verbs_dev.hpp"
 
 /**
  *  @brief This struct implements the doca verbs uar
  */
-struct doca_verbs_uar {
+struct doca_verbs_uar_open {
    public:
     /**
      * @brief constructor
@@ -50,13 +51,13 @@ struct doca_verbs_uar {
      * @param [in] allocation_type
      * The uar allocation type.
      */
-    doca_verbs_uar(struct ibv_context *context,
-                   enum doca_verbs_uar_allocation_type allocation_type);
+    doca_verbs_uar_open(struct ibv_context *context,
+                        enum doca_verbs_uar_allocation_type allocation_type);
 
     /**
      * @brief destructor
      */
-    ~doca_verbs_uar();
+    ~doca_verbs_uar_open();
 
     /**
      * @brief destroy the uar
@@ -95,15 +96,8 @@ struct doca_verbs_uar {
      */
     void *get_dbr_less_addr() const noexcept { return m_dbr_less_addr; }
 
-    /**
-     * @brief Get UAR memory allocation type
-     *
-     * @return UAR memory allocation type
-     */
-    enum doca_verbs_uar_allocation_type get_uar_mtype() const noexcept { return m_allocation_type; }
-
    private:
-    struct mlx5dv_devx_uar *m_uar_obj{};
+    struct mlx5dv_devx_uar *m_uar{};
     struct ibv_context *m_ibv_ctx{};
     enum doca_verbs_uar_allocation_type m_allocation_type {
         DOCA_VERBS_UAR_ALLOCATION_TYPE_BLUEFLAME
@@ -112,6 +106,6 @@ struct doca_verbs_uar {
     void *m_reg_addr{};
     void *m_dbr_less_addr{};
 
-    doca_verbs_uar(doca_verbs_uar const &) = delete;
-    doca_verbs_uar &operator=(doca_verbs_uar const &) = delete;
+    doca_verbs_uar_open(doca_verbs_uar_open const &) = delete;
+    doca_verbs_uar_open &operator=(doca_verbs_uar_open const &) = delete;
 };

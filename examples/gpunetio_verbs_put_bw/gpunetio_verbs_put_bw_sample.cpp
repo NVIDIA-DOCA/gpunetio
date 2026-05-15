@@ -126,8 +126,8 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
             /* Try with dmabuf mapping first. If it doesn't work, fallback to legacy nvidia-peermem
              * method.
              */
-            status =
-                doca_gpu_dmabuf_fd(resources->gpu_dev, resources->data_buf[idx], size, &dmabuf_fd);
+            status = doca_gpu_get_dmabuf_fd(resources->gpu_dev, resources->data_buf[idx], size,
+                                            &dmabuf_fd);
             if (status == DOCA_SUCCESS) {
                 resources->data_mr[idx] = ibv_reg_dmabuf_mr(
                     resources->verbs_pd, 0, size, (uint64_t)resources->data_buf[idx], dmabuf_fd,
@@ -230,6 +230,7 @@ doca_error_t verbs_server(struct verbs_config *cfg) {
     resources.conn_socket = -1;
     resources.num_iters = cfg->num_iters;
     resources.cuda_threads = cfg->cuda_threads;
+    resources.enable_umem_cpu = false;
 
     status = create_verbs_resources(cfg, &resources);
     if (status != DOCA_SUCCESS) {
@@ -303,6 +304,7 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
     resources.cuda_threads = cfg->cuda_threads;
     resources.nic_handler = cfg->nic_handler;
     resources.scope = (enum doca_gpu_dev_verbs_exec_scope)cfg->exec_scope;
+    resources.enable_umem_cpu = false;
 
     status = create_verbs_resources(cfg, &resources);
     if (status != DOCA_SUCCESS) {
@@ -362,13 +364,12 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
         goto destroy_events;
     }
 
-    DOCA_LOG(
-        LOG_INFO,
-        "Launching gpunetio_verbs_put_bw kernel with %d CUDA Blocks, %d CUDA threads each, %d "
-        "total number of iterations, %d iterations per cuda thread %d cpu proxy, %d shared mode",
-        VERBS_CUDA_BLOCK, resources.cuda_threads / VERBS_CUDA_BLOCK, resources.num_iters,
-        resources.num_iters / resources.cuda_threads,  // check this is ok
-        resources.nic_handler, resources.scope);
+    DOCA_LOG(LOG_INFO,
+             "Launching gpunetio_verbs_put_bw kernel with %d CUDA Blocks, %d CUDA threads each, %d "
+             "total number of iterations, %d iterations per cuda thread, %d nic handler, %s scope",
+             VERBS_CUDA_BLOCK, resources.cuda_threads / VERBS_CUDA_BLOCK, resources.num_iters,
+             resources.num_iters / resources.cuda_threads, resources.nic_handler,
+             (resources.scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD) ? "THREAD" : "WARP");
 
     if (resources.nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY) {
         args.qp_cpu = resources.qp->qp_gverbs;

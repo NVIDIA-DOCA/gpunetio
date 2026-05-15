@@ -46,7 +46,7 @@
 extern "C" {
 #endif
 
-#define DOCA_GPUNETIO_VERSION_MAJOR 2
+#define DOCA_GPUNETIO_VERSION_MAJOR 3
 #define DOCA_GPUNETIO_VERSION_MINOR 0
 #define DOCA_GPUNETIO_VERSION_PATCH 0
 
@@ -70,8 +70,8 @@ extern "C" {
      (DOCA_GPUNETIO_MIN_COMPAT_DEVICE_CODE_VERSION_MINOR << DOCA_GPUNETIO_VERSION_MINOR_SHIFT) | \
      (DOCA_GPUNETIO_MIN_COMPAT_DEVICE_CODE_VERSION_PATCH << DOCA_GPUNETIO_VERSION_PATCH_SHIFT))
 
-#define DOCA_GPUNETIO_MIN_COMPAT_HOST_CODE_VERSION_MAJOR 0
-#define DOCA_GPUNETIO_MIN_COMPAT_HOST_CODE_VERSION_MINOR 2
+#define DOCA_GPUNETIO_MIN_COMPAT_HOST_CODE_VERSION_MAJOR 3
+#define DOCA_GPUNETIO_MIN_COMPAT_HOST_CODE_VERSION_MINOR 0
 #define DOCA_GPUNETIO_MIN_COMPAT_HOST_CODE_VERSION_PATCH 0
 #define DOCA_GPUNETIO_MIN_COMPAT_HOST_CODE_VERSION                                             \
     ((DOCA_GPUNETIO_MIN_COMPAT_HOST_CODE_VERSION_MAJOR << DOCA_GPUNETIO_VERSION_MAJOR_SHIFT) | \
@@ -122,6 +122,14 @@ extern "C" {
  * Otherwise set it to 0.
  */
 #define DOCA_GPUNETIO_VERBS_MKEY_SWAPPED 1
+
+/**
+ * On NVIDIA NICs, we can violate the memory model using a lighter
+ * fence acquire in poll_cq* functions. Set to 1 by default.
+ */
+#ifndef DOCA_GPUNETIO_VERBS_EXP_NIC_FENCE_ACQUIRE_CTA
+#define DOCA_GPUNETIO_VERBS_EXP_NIC_FENCE_ACQUIRE_CTA 1
+#endif
 
 /**
  * Enable debug prints in this headerfile.
@@ -341,8 +349,9 @@ enum doca_gpu_dev_verbs_gpu_code_opt {
     DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_SKIP_AVAILABILITY_CHECK =
         (1 << 1),                                                 ///< Skip availability check
     DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_SKIP_DB_RINGING = (1 << 2),  ///< Skip DB ringing
-    DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_CPU_PROXY_UPDATE_PI = (1 << 3),  ///< in case of CPU proxy, update producer index
-    DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_MAX = INT_MAX                ///< Sentinel value
+    DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_CPU_PROXY_UPDATE_PI =
+        (1 << 3),                                   ///< in case of CPU proxy, update producer index
+    DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_MAX = INT_MAX  ///< Sentinel value
 };
 
 enum doca_gpu_dev_verbs_signal_op {

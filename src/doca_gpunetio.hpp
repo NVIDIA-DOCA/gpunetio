@@ -35,9 +35,9 @@
 
 #include <unordered_map>
 
-#include "doca_verbs_cuda_wrapper.h"
+#include "doca_gpunetio_cuda_wrapper.h"
 
-struct doca_gpu {
+struct doca_gpu_open {
     CUdevice cuda_dev; /* CUDA device handler */
     std::unordered_map<uintptr_t, struct doca_gpu_mtable *>
         *mtable;                       /* Table of GPU/CPU memory allocated addresses */

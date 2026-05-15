@@ -553,8 +553,7 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_counter(
 
         [[likely]] if (size_ > 0) {
             doca_gpu_dev_verbs_wqe_prepare_read(
-                qp, wqe_ptr, wqe_idx,
-                DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE,
+                qp, wqe_ptr, wqe_idx, DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE,
                 raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
                 laddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), laddr.key, size_);
         } else {

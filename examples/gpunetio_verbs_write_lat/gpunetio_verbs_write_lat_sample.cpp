@@ -95,7 +95,7 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
 
         /* Try with dmabuf mapping first. If it doesn't work, fallback to legacy nvidia-peermem
          * method. */
-        status = doca_gpu_dmabuf_fd(resources->gpu_dev, resources->local_poll_buf[idx], size_data,
+        status = doca_gpu_get_dmabuf_fd(resources->gpu_dev, resources->local_poll_buf[idx], size_data,
                                     &dmabuf_fd);
         if (status == DOCA_SUCCESS) {
             resources->local_poll_mr[idx] = ibv_reg_dmabuf_mr(
@@ -127,7 +127,7 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
 
         /* Try with dmabuf mapping first. If it doesn't work, fallback to legacy nvidia-peermem
          * method. */
-        status = doca_gpu_dmabuf_fd(resources->gpu_dev, resources->local_post_buf[idx], size_data,
+        status = doca_gpu_get_dmabuf_fd(resources->gpu_dev, resources->local_post_buf[idx], size_data,
                                     &dmabuf_fd);
         if (status == DOCA_SUCCESS) {
             resources->local_post_mr[idx] = ibv_reg_dmabuf_mr(
