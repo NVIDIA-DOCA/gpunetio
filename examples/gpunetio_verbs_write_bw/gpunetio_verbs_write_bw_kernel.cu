@@ -64,7 +64,7 @@ __global__ void write_bw(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, u
     // Assumption: QP is long enough to hold all the WQEs posted in the loop.
     // Application needs to poll only the last CQE corresponding to the last posted WQE.
     if (threadIdx.x == (blockDim.x - 1)) {
-        if (doca_gpu_dev_verbs_poll_cq_at(doca_gpu_dev_verbs_qp_get_cq_sq(qp),
+        if (doca_gpu_dev_verbs_poll_cq_at(qp,
                                           (wqe_idx - blockDim.x)) != 0) {
 #if ENABLE_DEBUG == 1
             printf("Error CQE!\n");

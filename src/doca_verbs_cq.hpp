@@ -36,6 +36,7 @@
 #include <stdlib.h>
 
 #include "host/doca_verbs.h"
+#include "doca_verbs_net_wrapper.h"
 
 struct doca_verbs_cq_attr_open {
    public:
@@ -52,7 +53,9 @@ struct doca_verbs_cq_attr_open {
     uint32_t cq_size{};
     void *cq_context{};
     doca_verbs_umem_t *external_umem{};
-    uint32_t external_umem_offset{};
+    uint64_t external_umem_offset{};
+    doca_verbs_umem_t *external_dbr_umem{};
+    uint64_t external_dbr_umem_offset{};
     doca_verbs_uar_t *external_uar{};
     enum doca_verbs_cq_overrun cq_overrun;
     uint8_t cq_collapsed;
@@ -99,8 +102,8 @@ struct doca_verbs_cq_open {
     void create();
 
     doca_error_t create_cq_obj(uint32_t uar_id, uint32_t log_nb_cqes, uint64_t db_umem_offset,
-                               uint32_t db_umem_id, uint32_t wq_umem_id, bool cq_overrun,
-                               uint8_t cq_collapsed) noexcept;
+                               uint32_t db_umem_id, uint32_t wq_umem_id, uint64_t cq_umem_offset,
+                               bool cq_overrun, uint8_t cq_collapsed) noexcept;
 
     /**
      * @brief Get CQ number
@@ -144,14 +147,23 @@ struct doca_verbs_cq_open {
      */
     uint32_t *get_cq_arm_dbr() const noexcept { return m_arm_dbr; }
 
+    /**
+     * @brief Get CQ DEVX object
+     *
+     * @return CQ DEVX object
+     */
+    struct mlx5dv_devx_obj *get_cq_obj() const noexcept { return m_cq_obj; }
+
    private:
     struct mlx5dv_devx_obj *m_cq_obj{};
     struct mlx5dv_devx_umem *m_umem_obj{};
+    struct mlx5dv_devx_umem *m_dbr_umem_obj{};
     struct mlx5dv_devx_uar *m_uar_obj{};
     struct ibv_context *m_ibv_ctx{};
     uint8_t *m_umem_buf{};
     uint8_t *m_cq_buf{};
-    uint32_t *m_db_buffer;
+    uint32_t *m_dbr_umem_buf{};
+    uint32_t *m_db_buffer{};
     uint64_t *m_uar_db_reg{};
     uint32_t m_num_cqes{};
     uint32_t m_cqn{};

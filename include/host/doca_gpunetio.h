@@ -85,6 +85,8 @@ enum doca_gpu_mem_type {
     DOCA_GPU_MEM_TYPE_GPU_CPU = 1,
     /* CPU memory with direct access from GPU. */
     DOCA_GPU_MEM_TYPE_CPU_GPU = 2,
+    /* GPU memory with CPU direct access using Data Direct. */
+    DOCA_GPU_MEM_TYPE_GPU_CPU_DATA_DIRECT = 3,
 };
 
 /**
@@ -92,7 +94,7 @@ enum doca_gpu_mem_type {
  *
  */
 struct doca_gpu_dev_verbs_qp;
-struct doca_gpu_dev_verbs_cq;
+struct doca_dev;
 struct doca_verbs_cq_t;
 struct doca_verbs_qp_t;
 
@@ -102,7 +104,7 @@ struct doca_verbs_qp_t;
  */
 struct doca_gpu_verbs_qp {
     doca_gpu_t *gpu_dev;
-    doca_verbs_qp_t *qp;
+    struct doca_verbs_qp_t *qp;
     uint64_t *cpu_db;
     uint64_t sq_wqe_pi_last;
     uint64_t *sq_db;
@@ -117,6 +119,15 @@ struct doca_gpu_verbs_qp {
     struct doca_gpu_dev_verbs_qp *qp_gpu;
     /* CPU-accessible GPU handler. Linked with qp_gpu via GDRCopy. */
     struct doca_gpu_dev_verbs_qp *qp_gpu_h;
+    /*
+     * Free flow rings DB whenever this threshold is reached or there is no more WQE.
+     * Set the threshold to 0 to ring DB only when there is no more WQE.
+     */
+    uint32_t free_flow_ring_db_threshold;
+    enum doca_gpu_dev_verbs_cq_type cq_type;
+    struct doca_verbs_cq_t *cq_sq;
+    unsigned int refcount;
+    bool enable_data_direct;
 };
 
 /**
@@ -132,6 +143,7 @@ struct doca_gpu_verbs_qp_error_info {
 };
 
 typedef void *doca_gpu_verbs_service_t;
+typedef void *doca_gpu_net_event_t;
 
 /**
  * @brief Create a DOCA GPUNETIO handler.
@@ -169,6 +181,7 @@ doca_error_t doca_gpu_destroy(doca_gpu_t *gpu_dev);
  * - DOCA_GPU_MEM_TYPE_GPU memptr_gpu is not NULL while memptr_cpu is NULL.
  * - DOCA_GPU_MEM_TYPE_GPU_CPU both memptr_gpu and memptr_cpu are not NULL.
  * - DOCA_GPU_MEM_TYPE_CPU_GPU both memptr_gpu and memptr_cpu are not NULL.
+ * - DOCA_GPU_MEM_TYPE_GPU_CPU_DATA_DIRECT both memptr_gpu and memptr_cpu are not NULL.
  *
  * @param [in] gpu_dev
  * DOCA GPUNetIO handler.
@@ -190,13 +203,14 @@ doca_error_t doca_gpu_destroy(doca_gpu_t *gpu_dev);
  * @return
  * Non NULL memptr_gpu pointer on success, NULL otherwise.
  * Non NULL memptr_cpu pointer on success in case of DOCA_GPU_MEM_TYPE_CPU_GPU and
- * DOCA_GPU_MEM_TYPE_GPU_CPU, NULL otherwise. DOCA_SUCCESS - in case of success. doca_error code -
- * in case of failure:
+ * DOCA_GPU_MEM_TYPE_GPU_CPU and DOCA_GPU_MEM_TYPE_GPU_CPU_DATA_DIRECT, NULL otherwise.
+ * DOCA_SUCCESS - in case of success. doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
  * - DOCA_ERROR_NO_MEMORY - if an error occurred dealing with GPU memory.
  */
 doca_error_t doca_gpu_mem_alloc(doca_gpu_t *gpu_dev, size_t size, size_t alignment,
-                                enum doca_gpu_mem_type mtype, void **memptr_gpu, void **memptr_cpu);
+                                enum doca_gpu_mem_type mtype, void **memptr_gpu,
+                                void **memptr_cpu);
 
 /**
  * Free a GPU memory buffer.
@@ -229,6 +243,10 @@ doca_error_t doca_gpu_mem_free(doca_gpu_t *gpu, void *memptr_gpu);
  * DOCA Verbs CQ SQ CPU object connected to the QP.
  * @param [in] send_dbr_mode_ext
  * Send DBR mode.
+ * @param [in] cq_type
+ * CQ type.
+ * @param [in] enable_data_direct
+ * Whether to enable data direct support for this QP.
  * @param [out] qp_out
  * DOCA GPUNetIO Verbs QP object.
  *
@@ -237,10 +255,12 @@ doca_error_t doca_gpu_mem_free(doca_gpu_t *gpu, void *memptr_gpu);
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
  */
-doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, doca_verbs_qp_t *qp,
+doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, struct doca_verbs_qp_t *qp,
                                       enum doca_gpu_dev_verbs_nic_handler nic_handler,
-                                      void *gpu_qp_umem_dev_ptr, doca_verbs_cq_t *cq_sq,
+                                      void *gpu_qp_umem_dev_ptr, struct doca_verbs_cq_t *cq_sq,
                                       enum doca_gpu_verbs_send_dbr_mode_ext send_dbr_mode_ext,
+                                      enum doca_gpu_dev_verbs_cq_type cq_type,
+                                      bool enable_data_direct,
                                       struct doca_gpu_verbs_qp **qp_out);
 
 /**
@@ -415,7 +435,74 @@ doca_error_t doca_gpu_verbs_query_last_error(struct doca_gpu_verbs_qp *qp,
                                              struct doca_gpu_verbs_qp_error_info *error_info);
 
 /**
- * Export multiple QPs to GPU
+ * Create a nonblocking DEVX-backed async CQ error event object.
+ *
+ * @param [in] net_dev
+ * DOCA Verbs Device instance.
+ * @param [out] out_event
+ * Pointer to the created event object.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ * - DOCA_ERROR_NOT_SUPPORTED - DEVX not supported.
+ */
+doca_error_t doca_gpu_net_event_create(struct doca_dev *net_dev, doca_gpu_net_event_t *out_event);
+
+/**
+ * Subscribe high-level QPs to async SQ CQ error events.
+ * In case of error, the event object will be degraded and the caller should destroy it to cleanup.
+ *
+ * @param [in] event
+ * Event object.
+ * @param [in] qps
+ * QPs to subscribe.
+ * @param [in] num_qps
+ * Number of QPs to subscribe.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ * - DOCA_ERROR_NOT_SUPPORTED - DEVX not supported.
+ */
+doca_error_t doca_gpu_net_event_subscribe(doca_gpu_net_event_t event,
+                                          struct doca_gpu_verbs_qp *qps[], unsigned int num_qps);
+
+/**
+ * Nonblocking poll for an async event.
+ * If no event is pending this returns DOCA_SUCCESS.
+ *
+ * @param [in] event
+ * Event object.
+ * @param [out] out_qp
+ * QP object.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ * - DOCA_ERROR_NOT_SUPPORTED - DEVX not supported.
+ */
+doca_error_t doca_gpu_net_event_get(doca_gpu_net_event_t event, struct doca_gpu_verbs_qp **out_qp);
+
+/**
+ * Destroy an async CQ error event object.
+ *
+ * @param [in] event
+ * Event object to destroy.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ */
+doca_error_t doca_gpu_net_event_destroy(doca_gpu_net_event_t event);
+
+/**
+ * Export multiple QPs to GPU.
+ * This API allows holes in the `qps` array.
  *
  * @param [in] gpu_dev
  * DOCA GPUNetIO handler.

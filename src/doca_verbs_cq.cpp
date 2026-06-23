@@ -47,6 +47,7 @@
 #include "doca_verbs_net_wrapper.h"
 #include "doca_verbs_dev.hpp"
 #include "doca_verbs_cq_sdk_wrapper.h"
+#include "doca_verbs_uar.hpp"
 
 #define DOCA_VERBS_CQE_SIZE 64
 
@@ -55,8 +56,7 @@
  *********************************************************************************************************************/
 
 namespace {
-static constexpr uint32_t sc_cq_doorbell_size = 64;
-
+static constexpr uint32_t sc_cq_dbr_size = 8;
 using create_cq_in = uint32_t[MLX5_ST_SZ_DW(create_cq_in)];
 using create_cq_out = uint32_t[MLX5_ST_SZ_DW(create_cq_out)];
 
@@ -71,6 +71,8 @@ doca_verbs_cq_attr_open::doca_verbs_cq_attr_open()
       cq_context(nullptr),
       external_umem(nullptr),
       external_umem_offset(0),
+      external_dbr_umem(nullptr),
+      external_dbr_umem_offset(0),
       external_uar(nullptr),
       cq_overrun(DOCA_VERBS_CQ_DISABLE_OVERRUN),
       cq_collapsed(0) {}
@@ -96,6 +98,8 @@ doca_verbs_cq_open::doca_verbs_cq_open(struct ibv_context *ibv_ctx,
     m_cq_attr.external_uar = cq_attr->external_uar;
     m_cq_attr.cq_overrun = cq_attr->cq_overrun;
     m_cq_attr.cq_collapsed = cq_attr->cq_collapsed;
+    m_cq_attr.external_dbr_umem = cq_attr->external_dbr_umem;
+    m_cq_attr.external_dbr_umem_offset = cq_attr->external_dbr_umem_offset;
 
     try {
         create();
@@ -110,8 +114,8 @@ doca_verbs_cq_open::~doca_verbs_cq_open() { static_cast<void>(destroy()); }
 
 doca_error_t doca_verbs_cq_open::create_cq_obj(uint32_t uar_id, uint32_t log_nb_cqes,
                                                uint64_t db_umem_offset, uint32_t db_umem_id,
-                                               uint32_t wq_umem_id, bool cq_overrun,
-                                               uint8_t cq_collapsed) noexcept {
+                                               uint32_t wq_umem_id, uint64_t cq_umem_offset,
+                                               bool cq_overrun, uint8_t cq_collapsed) noexcept {
     create_cq_in create_in{0};
     create_cq_out create_out{0};
 
@@ -124,7 +128,7 @@ doca_error_t doca_verbs_cq_open::create_cq_obj(uint32_t uar_id, uint32_t log_nb_
     DEVX_SET(create_cq_in, create_in, cq_context.uar_page, uar_id);
     DEVX_SET(create_cq_in, create_in, cq_umem_id, wq_umem_id);
     DEVX_SET(create_cq_in, create_in, cq_umem_valid, 1);
-    DEVX_SET64(create_cq_in, create_in, cq_umem_offset, 0x0);
+    DEVX_SET64(create_cq_in, create_in, cq_umem_offset, cq_umem_offset);
     DEVX_SET(create_cq_in, create_in, cq_context.dbr_umem_id, db_umem_id);
     DEVX_SET(create_cq_in, create_in, cq_context.dbr_umem_valid, 1);
     DEVX_SET64(create_cq_in, create_in, cq_context.dbr_addr, db_umem_offset);
@@ -183,14 +187,10 @@ void doca_verbs_cq_open::create() {
     uint32_t dbr_umem_id{0};
     uint64_t dbr_umem_offset{0};
 
-    dbr_umem_offset = m_num_cqes * DOCA_VERBS_CQE_SIZE;
-    dbr_umem_offset =
-        doca_internal_utils_align_up_uint32(dbr_umem_offset, DOCA_VERBS_CACHELINE_SIZE);
-
     if (m_cq_attr.external_umem == nullptr) {
         /* Case of internal umem */
         uint32_t total_umem_size = doca_internal_utils_align_up_uint32(
-            dbr_umem_offset + sc_cq_doorbell_size, DOCA_VERBS_PAGE_SIZE);
+            m_num_cqes * DOCA_VERBS_CQE_SIZE, DOCA_VERBS_PAGE_SIZE);
 
         m_umem_buf = (uint8_t *)memalign(DOCA_VERBS_PAGE_SIZE, total_umem_size);
         memset(m_umem_buf, 0, total_umem_size);
@@ -204,26 +204,60 @@ void doca_verbs_cq_open::create() {
 
         m_cq_buf = m_umem_buf;
         umem_id = m_umem_obj->umem_id;
-        dbr_umem_id = umem_id;
-        m_db_buffer = reinterpret_cast<uint32_t *>(m_cq_buf + dbr_umem_offset);
     } else {
         /* Case of external umem */
+        uint8_t *umem_base = nullptr;
         status = doca_verbs_umem_get_address(m_cq_attr.external_umem,
-                                             reinterpret_cast<void **>(&m_cq_buf));
+                                             reinterpret_cast<void **>(&umem_base));
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to get external umem address");
             throw status;
         }
+
+        /* Apply ring umem offset so m_cq_buf points to the start of CQEs */
+        m_cq_buf = umem_base + m_cq_attr.external_umem_offset;
 
         status = doca_verbs_umem_get_id(m_cq_attr.external_umem, &umem_id);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to get external umem id");
             throw status;
         }
+    }
 
-        /* Case of external umem */
-        dbr_umem_id = umem_id;
-        m_db_buffer = reinterpret_cast<uint32_t *>(m_cq_buf + dbr_umem_offset);
+    if (m_cq_attr.external_dbr_umem == nullptr) {
+        uint32_t total_dbr_umem_size =
+            doca_internal_utils_align_up_uint32(sc_cq_dbr_size, DOCA_VERBS_PAGE_SIZE);
+        m_dbr_umem_buf = (uint32_t *)memalign(DOCA_VERBS_PAGE_SIZE, total_dbr_umem_size);
+        memset(m_dbr_umem_buf, 0, total_dbr_umem_size);
+
+        auto dbr_umem_status = doca_verbs_wrapper_mlx5dv_devx_umem_reg(
+            m_ibv_ctx, m_dbr_umem_buf, total_dbr_umem_size, 0, &m_dbr_umem_obj);
+        if (dbr_umem_status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to create CQ DBR UMEM");
+            throw dbr_umem_status;
+        }
+
+        dbr_umem_offset = 0;
+        dbr_umem_id = m_dbr_umem_obj->umem_id;
+        m_db_buffer = m_dbr_umem_buf;
+    } else {
+        /* Separate DBR umem path */
+        status = doca_verbs_umem_get_id(m_cq_attr.external_dbr_umem, &dbr_umem_id);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to get external DBR umem id");
+            throw status;
+        }
+
+        uint8_t *dbr_base = nullptr;
+        status = doca_verbs_umem_get_address(m_cq_attr.external_dbr_umem,
+                                             reinterpret_cast<void **>(&dbr_base));
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to get external DBR umem address");
+            throw status;
+        }
+
+        dbr_umem_offset = m_cq_attr.external_dbr_umem_offset;
+        m_db_buffer = reinterpret_cast<uint32_t *>(dbr_base + dbr_umem_offset);
     }
 
     m_ci_dbr = &m_db_buffer[MLX5_CQ_SET_CI];
@@ -242,7 +276,8 @@ void doca_verbs_cq_open::create() {
             }
         }
 
-        m_uar_db_reg = reinterpret_cast<uint64_t *>(m_uar_obj->reg_addr);
+        m_uar_db_reg = reinterpret_cast<uint64_t *>(
+            reinterpret_cast<uintptr_t>(m_uar_obj->base_addr) + MLX5_CQ_DOORBELL);
         uar_id = m_uar_obj->page_id;
     } else {
         /* Case of external UAR */
@@ -252,17 +287,21 @@ void doca_verbs_cq_open::create() {
             throw status;
         }
 
-        void *reg_addr{};
-        status = doca_verbs_uar_reg_addr_get(m_cq_attr.external_uar, &reg_addr);
-        if (status != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "Failed to get external UAR reg_addr");
+        void *base_addr{};
+        if (m_cq_attr.external_uar->type != DOCA_VERBS_SDK_LIB_TYPE_OPEN) {
+            DOCA_LOG(LOG_ERR, "External UAR for CQ from SDK is not supported");
+            status = DOCA_ERROR_NOT_SUPPORTED;
             throw status;
         }
-        m_uar_db_reg = reinterpret_cast<uint64_t *>(reg_addr);
+        base_addr = m_cq_attr.external_uar->open->get_base_addr();
+        m_uar_db_reg =
+            reinterpret_cast<uint64_t *>(reinterpret_cast<uintptr_t>(base_addr) + MLX5_CQ_DOORBELL);
     }
 
     /* Create CQ object */
-    status = create_cq_obj(uar_id, log_nb_cqes, dbr_umem_offset, dbr_umem_id, umem_id,
+    uint64_t ring_offset =
+        (m_cq_attr.external_umem != nullptr) ? m_cq_attr.external_umem_offset : 0;
+    status = create_cq_obj(uar_id, log_nb_cqes, dbr_umem_offset, dbr_umem_id, umem_id, ring_offset,
                            m_cq_attr.cq_overrun, m_cq_attr.cq_collapsed);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to create CQ object");
@@ -312,6 +351,20 @@ doca_error_t doca_verbs_cq_open::destroy() noexcept {
     if (m_umem_buf) {
         free(m_umem_buf);
         m_umem_buf = nullptr;
+    }
+
+    if (m_dbr_umem_obj) {
+        auto dereg_status = doca_verbs_wrapper_mlx5dv_devx_umem_dereg(m_dbr_umem_obj);
+        if (dereg_status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to destroy DBR UMEM object");
+            return dereg_status;
+        }
+        m_dbr_umem_obj = nullptr;
+    }
+
+    if (m_dbr_umem_buf) {
+        free(m_dbr_umem_buf);
+        m_dbr_umem_buf = nullptr;
     }
 
     return DOCA_SUCCESS;
@@ -489,6 +542,36 @@ doca_error_t doca_verbs_cq_attr_set_external_umem(doca_verbs_cq_attr_t *cq_attr,
 
     cq_attr->open->external_umem = external_umem;
     cq_attr->open->external_umem_offset = external_umem_offset;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_cq_attr_set_external_dbr_umem(doca_verbs_cq_attr_t *cq_attr,
+                                                      doca_verbs_umem_t *external_dbr_umem,
+                                                      uint64_t external_dbr_umem_offset) {
+    if (cq_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set external_dbr_umem: parameter cq_attr is NULL.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+    if (external_dbr_umem == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set external_dbr_umem: parameter external_dbr_umem is NULL.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (cq_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        DOCA_LOG(
+            LOG_ERR,
+            "Failed to set external_dbr_umem: SDK does not support setting external DBR UMEM.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (cq_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    cq_attr->open->external_dbr_umem = external_dbr_umem;
+    cq_attr->open->external_dbr_umem_offset = external_dbr_umem_offset;
 
     return DOCA_SUCCESS;
 }
@@ -734,19 +817,19 @@ doca_error_t doca_verbs_cq_get_dbr_addr(doca_verbs_cq_t *cq, uint64_t **uar_db_r
 }
 
 doca_error_t doca_verbs_cq_get_cqn(const doca_verbs_cq_t *cq, uint32_t *cqn) {
-    if (cq == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get cq cqn: parameter cq is NULL");
+    if (cq == nullptr || cqn == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get cq cqn: invalid NULL parameter");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
     if (cq->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
         auto err = doca_verbs_sdk_wrapper_cq_get_cqn(cq->sdk, cqn);
-        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
-            return DOCA_SUCCESS;
-        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) return DOCA_SUCCESS;
+        if (err == DOCA_SDK_WRAPPER_API_ERROR) {
             DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
             return DOCA_ERROR_UNEXPECTED;
         }
+        return DOCA_ERROR_NOT_SUPPORTED;
     }
 
     if (cq->open == nullptr) {

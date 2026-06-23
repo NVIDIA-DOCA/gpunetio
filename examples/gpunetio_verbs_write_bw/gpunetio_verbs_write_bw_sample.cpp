@@ -123,8 +123,8 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
             }
         } else {
             status = doca_gpu_mem_alloc(resources->gpu_dev, size_data, host_page_size,
-                                        DOCA_GPU_MEM_TYPE_GPU, (void **)&(resources->data_buf[idx]),
-                                        NULL);
+                                        DOCA_GPU_MEM_TYPE_GPU,
+                                        (void **)&(resources->data_buf[idx]), NULL);
             if (status != DOCA_SUCCESS) {
                 DOCA_LOG(LOG_ERR, "Failed to allocate GPU memory buffer %d of size = %zd (%d x %d)",
                          idx, size_data, message_size[idx], resources->cuda_threads);
