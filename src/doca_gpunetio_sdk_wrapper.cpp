@@ -335,8 +335,6 @@ doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_verbs_req_notify_cq(void *gpu_dev,
     if (get_sdk_wrapper_env_var() > 0) {
         if (init_gpunetio_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
 
-        DOCA_LOG(LOG_ERR, "Calling p_doca_gpu_verbs_req_notify_cq");
-
         if (p_doca_gpu_verbs_req_notify_cq == nullptr) {
             DOCA_LOG(LOG_ERR,
                      "DOCA SDK symbol doca_gpu_verbs_req_notify_cq not found at %s",
@@ -344,9 +342,7 @@ doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_verbs_req_notify_cq(void *gpu_dev,
             return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
         }
 
-        DOCA_LOG(LOG_ERR, "Calling p_doca_gpu_verbs_req_notify_cq 2");
         doca_err = p_doca_gpu_verbs_req_notify_cq(gpu_dev, verbs_cq);
-        DOCA_LOG(LOG_ERR, "Calling p_doca_gpu_verbs_req_notify_cq doca_err %d", doca_err);
         if (doca_err == DOCA_SUCCESS) {
             return DOCA_SDK_WRAPPER_SUCCESS;
         } else {
