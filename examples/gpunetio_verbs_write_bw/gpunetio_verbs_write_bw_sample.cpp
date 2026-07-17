@@ -123,8 +123,8 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
             }
         } else {
             status = doca_gpu_mem_alloc(resources->gpu_dev, size_data, host_page_size,
-                                        DOCA_GPU_MEM_TYPE_GPU,
-                                        (void **)&(resources->data_buf[idx]), NULL);
+                                        DOCA_GPU_MEM_TYPE_GPU, (void **)&(resources->data_buf[idx]),
+                                        NULL);
             if (status != DOCA_SUCCESS) {
                 DOCA_LOG(LOG_ERR, "Failed to allocate GPU memory buffer %d of size = %zd (%d x %d)",
                          idx, size_data, message_size[idx], resources->cuda_threads);
@@ -137,7 +137,7 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
              * method.
              */
             status = doca_gpu_get_dmabuf_fd(resources->gpu_dev, resources->data_buf[idx], size_data,
-                                        &dmabuf_fd);
+                                            &dmabuf_fd);
             if (status == DOCA_SUCCESS) {
                 resources->data_mr[idx] = ibv_reg_dmabuf_mr(
                     resources->verbs_pd, 0, size_data, (uint64_t)resources->data_buf[idx],
@@ -257,6 +257,7 @@ doca_error_t verbs_server(struct verbs_config *cfg) {
     ret = oob_verbs_connection_server_setup(&server_sock_fd, &resources.conn_socket);
     if (ret != 0) {
         DOCA_LOG(LOG_ERR, "Failed to setup OOB connection with remote peer: %d", ret);
+        status = DOCA_ERROR_CONNECTION_ABORTED;
         goto server_cleanup;
     }
 
@@ -308,6 +309,7 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
     struct cpu_proxy_args args;
     struct doca_gpu_dev_verbs_qp *qp_gpu;
     int ret;
+    void *cq_context;
 
     resources.conn_socket = -1;
     resources.num_iters = cfg->num_iters;
@@ -315,6 +317,7 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
     resources.nic_handler = cfg->nic_handler;
     resources.scope = (enum doca_gpu_dev_verbs_exec_scope)cfg->exec_scope;
     resources.enable_umem_cpu = false;
+    resources.enable_comp_channel = true;
 
     status = create_verbs_resources(cfg, &resources);
     if (status != DOCA_SUCCESS) {
@@ -331,6 +334,7 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
     ret = oob_verbs_connection_client_setup(cfg->server_ip_addr.c_str(), &resources.conn_socket);
     if (ret != 0) {
         DOCA_LOG(LOG_ERR, "Failed to setup OOB connection with remote peer: %d", ret);
+        status = DOCA_ERROR_CONNECTION_ABORTED;
         goto client_cleanup;
     }
 
@@ -452,12 +456,38 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
             goto stop_thread;
         }
 
-        double bw = (double)((double)((message_size[idx] * num_messages) / et_ms * 1000.0f) * ((double)8.0) / BW_FORMAT_FACTOR);
+        double bw = (double)((double)((message_size[idx] * num_messages) / et_ms * 1000.0f) *
+                             ((double)8.0) / BW_FORMAT_FACTOR);
         double msgrate = (double)(num_messages / et_ms * 1000.0f / 1000000.0f);
 
         printf(REPORT_FMT_EXT, message_size[idx], resources.num_iters, bw, msgrate, (double)et_ms);
 
         printf("\n");
+
+        if (resources.comp_channel) {
+            status = doca_verbs_get_cq_comp_channel_event(resources.comp_channel, &cq_context);
+            if (status == DOCA_SUCCESS && cq_context != nullptr) {
+                uint32_t qpn;
+                struct doca_gpu_verbs_qp *qp_tmp = (struct doca_gpu_verbs_qp *)cq_context;
+
+                status = doca_verbs_qp_get_qpn(qp_tmp->qp, &qpn);
+                if (status != DOCA_SUCCESS) {
+                    DOCA_LOG(LOG_ERR, "Failed doca_verbs_qp_get_qpn %d", status);
+                    goto stop_thread;
+                }
+
+                DOCA_LOG(LOG_ERR, "Got error at QP %p QPN %x", qp_tmp, qpn);
+                status = doca_verbs_ack_cq_events(resources.qp->cq_sq, 1);
+                if (status != DOCA_SUCCESS) {
+                    DOCA_LOG(LOG_ERR, "Error in doca_verbs_ack_cq_events");
+                    goto stop_thread;
+                }
+            }
+            else if (status != DOCA_SUCCESS && status != DOCA_ERROR_AGAIN) {
+                DOCA_LOG(LOG_ERR, "Error in doca_verbs_get_cq_comp_channel_event");
+                goto stop_thread;
+            }
+        }
     }
 
 stop_thread:

@@ -1,11 +1,28 @@
 # Changelog
 
-## [main]
+## [4.0.0]
 
 ### Added
 
-- Introduced GDA-KI Free Flow feature.
-- Added `doca_gpu_verbs_qp_list_hl` and `doca_gpu_verbs_qp_group_list_hl` APIs to support creating multiple QPs in a single call. Doing so saves memory allocation and registration overhead.
+- Added GDA-KI Free Flow support, including the `DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW` NIC handler mode.
+- Added high-level batched QP and QP group creation/destruction APIs (`doca_gpu_verbs_create_qp_list_hl`, `doca_gpu_verbs_destroy_qp_list_hl`, `doca_gpu_verbs_create_qp_group_list_hl`, and `doca_gpu_verbs_destroy_qp_group_list_hl`) backed by shared control-buffer slabs.
+- Added CQ type selection for 64B GPU CQs, collapsed GPU CQs, and collapsed host-memory CQs, plus device-side polling support for the new CQ modes.
+- Added DEVX-backed asynchronous CQ error event APIs: `doca_verbs_comp_channel_create`, `doca_verbs_cq_attr_set_comp_channel`, `doca_verbs_get_cq_comp_channel_event`, `doca_verbs_ack_cq_events`, and `doca_verbs_comp_channel_destroy`. Works with oppen source and DOCA SDK 3.5 or newer
+- Added Data Direct support through `DOCA_GPU_MEM_TYPE_GPU_CPU_DATA_DIRECT` and the high-level QP initialization flag `DOCA_GPUNETIO_VERBS_QP_INIT_ATTR_FLAGS_SUPPORT_DATA_DIRECT`.
+- Added DOCA SDK congestion-control group support, including CC group wrappers and `DOCA_VERBS_QP_ATTR_CC_GROUP`.
+- Added device-side MMIO store-release helpers and made cached `__ldg` loads opt-in through `DOCA_GPUNETIO_VERBS_USE_LDG`.
+
+### Changed
+
+- Extended `doca_gpu_verbs_export_qp` and high-level QP creation paths to pass CQ type and Data Direct configuration into exported GPU QPs.
+- Updated CQ and QP external UMEM handling to support UMEM offsets and separate CQ doorbell-record UMEM, enabling shared-slab suballocation.
+- Updated CQ doorbell handling to use the CQ doorbell register offset from the UAR base address.
+- Updated multi-QP export handling to allow holes in QP arrays.
+- Updated device-side completion polling and WQE preparation paths to account for collapsed and host-memory CQ modes.
+
+### Removed
+
+- Removed the direct `<infiniband/verbs.h>` include from the DOCA Verbs QP SDK wrapper.
 
 ## [3.0.0]
 

@@ -33,6 +33,7 @@
 #include "verbs_common.h"
 
 #define ENABLE_DEBUG 0
+#define ENABLE_CQE_ERROR_FOR_COMP_CHANNEL 0
 
 __global__ void write_bw(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, uint32_t size,
                          uint8_t *src_buf, uint32_t src_buf_mkey, uint8_t *dst_buf,
@@ -44,6 +45,12 @@ __global__ void write_bw(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, u
 
     for (uint32_t idx = threadIdx.x; idx < num_iters; idx += blockDim.x) {
         wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
+
+#if ENABLE_CQE_ERROR_FOR_COMP_CHANNEL == 1
+        /* To test CQ comp channel feature, cause a CQE error on purpose for message size 64B. */
+        if (wqe_idx == (num_iters * 4) - 1)
+            dst_buf_mkey = 0;
+#endif
 
         doca_gpu_dev_verbs_wqe_prepare_write(
             qp, wqe_ptr, wqe_idx, MLX5_OPCODE_RDMA_WRITE, DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE,

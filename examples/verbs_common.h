@@ -136,6 +136,8 @@ struct verbs_resources {
         send_dbr_mode_ext; /* Enable send dbr mode ext to avoid DBREC update on sending */
 
     bool enable_umem_cpu; /* Enable creation of QP/CQ UMEM on CPU pinned memory */
+    bool enable_comp_channel; /* Enable creation of CQ comp channel for error checking */
+    doca_verbs_comp_channel_t *comp_channel;
 };
 
 struct cpu_proxy_args {
@@ -166,7 +168,7 @@ doca_error_t verbs_client(struct verbs_config *cfg);
  *
  * @oob_sock_fd [out]: Socket FD
  * @oob_client_sock [out]: Client socket FD
- * @return: positive integer on success and -1 otherwise
+ * @return: 0 on success and -1 otherwise
  */
 int oob_verbs_connection_server_setup(int *oob_sock_fd, int *oob_client_sock);
 
@@ -183,7 +185,7 @@ void oob_verbs_connection_server_close(int oob_sock_fd, int oob_client_sock);
  *
  * @server_ip [in]: Server IP address to connect
  * @oob_sock_fd [out]: Socket FD
- * @return: positive integer on success and -1 otherwise
+ * @return: 0 on success and -1 otherwise
  */
 int oob_verbs_connection_client_setup(const char *server_ip, int *oob_sock_fd);
 

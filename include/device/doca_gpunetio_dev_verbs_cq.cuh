@@ -96,7 +96,6 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_cq_print_cqe_err(
 }
 #endif
 
-
 // ==================== Poll One CQ At ====================
 
 /**
@@ -173,8 +172,8 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>
 __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_one_cq_device_at(
     struct doca_gpu_dev_verbs_cq *cq, uint64_t cons_index) {
-    int status = doca_priv_gpu_dev_verbs_poll_one_cq_device_at<resource_sharing_mode>(
-        cq, cons_index);
+    int status =
+        doca_priv_gpu_dev_verbs_poll_one_cq_device_at<resource_sharing_mode>(cq, cons_index);
     if (status == 0) {
         doca_gpu_dev_verbs_fence_acquire_nvidia_nic();
         doca_gpu_dev_verbs_atomic_max<uint64_t, resource_sharing_mode>(&cq->cqe_ci, cons_index + 1);
@@ -199,8 +198,7 @@ __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_one_cq_host_at(
     struct doca_gpu_dev_verbs_cq *cq, uint64_t cons_index) {
     int status = 0;
     uint64_t cqe_ci = doca_gpu_dev_verbs_load_relaxed<resource_sharing_mode>(&cq->cqe_ci);
-    if (cons_index >= cqe_ci)
-        status = EBUSY;
+    if (cons_index >= cqe_ci) status = EBUSY;
     doca_gpu_dev_verbs_fence_acquire_nvidia_nic();
     return status;
 }
@@ -222,14 +220,14 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
 __device__ static __forceinline__ int doca_priv_gpu_dev_verbs_poll_cq_one_collapsed_at(
     struct doca_gpu_dev_verbs_cq *cq, uint64_t cons_index, uint64_t *new_cqe_ci) {
     struct doca_gpunetio_ib_mlx5_cqe64 *cqe64 =
-        (struct doca_gpunetio_ib_mlx5_cqe64 *)doca_gpu_dev_verbs_load_const((uintptr_t *)&cq->cqe_daddr);
+        (struct doca_gpunetio_ib_mlx5_cqe64 *)doca_gpu_dev_verbs_load_const(
+            (uintptr_t *)&cq->cqe_daddr);
     const uint32_t cqe_num = doca_gpu_dev_verbs_load_const(&cq->cqe_num);
     uint64_t cqe_ci = doca_gpu_dev_verbs_load_relaxed<resource_sharing_mode>(&cq->cqe_ci);
 
     [[unlikely]] if (cons_index < cqe_ci)
         return 0;
-    if (cons_index >= cqe_ci + cqe_num)
-        return EBUSY;
+    if (cons_index >= cqe_ci + cqe_num) return EBUSY;
 
     uint32_t cqe_chunk =
         doca_gpu_dev_verbs_load_relaxed_sys_global(&cqe64->wqe_counter_sig_op_own_raw);
@@ -261,12 +259,12 @@ __device__ static __forceinline__ int doca_priv_gpu_dev_verbs_poll_cq_one_collap
  *
  * @param cq - Collapsed Completion Queue (CQ)
  * @param cons_index - Index of the Completion Queue (CQ) to be polled
- * @return On success, doca_gpu_dev_verbs_poll_cq_one_collapsed_at() returns 0. If the completion is
+ * @return On success, doca_gpu_dev_verbs_poll_one_cq_collapsed_at() returns 0. If the completion is
  * not available, returns EBUSY. If it is a completion with error, returns a negative value.
  */
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>
-__device__ static __forceinline__ int doca_gpu_dev_verbs_poll_cq_one_collapsed_at(
+__device__ static __forceinline__ int doca_gpu_dev_verbs_poll_one_cq_collapsed_at(
     struct doca_gpu_dev_verbs_cq *cq, uint64_t cons_index) {
     uint64_t new_cqe_ci = 0;
     int status = doca_priv_gpu_dev_verbs_poll_cq_one_collapsed_at<resource_sharing_mode>(
@@ -291,29 +289,25 @@ __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_cq_one_collapsed_a
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
           enum doca_gpu_dev_verbs_qp_type qp_type = DOCA_GPUNETIO_VERBS_QP_SQ,
-          enum doca_gpu_dev_verbs_cq_type cq_type =
-              DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_one_cq_at(
     struct doca_gpu_dev_verbs_qp *qp, uint64_t cons_index) {
     struct doca_gpu_dev_verbs_cq *cq = doca_gpu_dev_verbs_qp_get_cq<qp_type>(qp);
     enum doca_gpu_dev_verbs_cq_type mode = cq_type;
     if (cq_type == DOCA_GPUNETIO_VERBS_CQ_UNKNOWN) {
-        mode = (enum doca_gpu_dev_verbs_cq_type)doca_gpu_dev_verbs_load_const(
-            (uint8_t *)&cq->cq_type);
+        mode =
+            (enum doca_gpu_dev_verbs_cq_type)doca_gpu_dev_verbs_load_const((uint8_t *)&cq->cq_type);
     }
 
     if (mode == DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED_HOST) {
         return doca_gpu_dev_verbs_poll_one_cq_host_at<resource_sharing_mode>(cq, cons_index);
-    }
-    else if (mode == DOCA_GPUNETIO_VERBS_CQ_64B) {
+    } else if (mode == DOCA_GPUNETIO_VERBS_CQ_64B) {
         return doca_gpu_dev_verbs_poll_one_cq_device_at<resource_sharing_mode>(cq, cons_index);
-    }
-    else if (mode == DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED) {
-        return doca_gpu_dev_verbs_poll_cq_one_collapsed_at<resource_sharing_mode>(cq, cons_index);
+    } else if (mode == DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED) {
+        return doca_gpu_dev_verbs_poll_one_cq_collapsed_at<resource_sharing_mode>(cq, cons_index);
     }
     return EINVAL;
 }
-
 
 // ==================== Poll CQ At ====================
 
@@ -329,7 +323,8 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
 __device__ static __forceinline__ int doca_priv_gpu_dev_verbs_poll_cq_device_at(
     struct doca_gpu_dev_verbs_cq *cq, uint64_t cons_index) {
     struct doca_gpunetio_ib_mlx5_cqe64 *cqe =
-        (struct doca_gpunetio_ib_mlx5_cqe64 *)doca_gpu_dev_verbs_load_const((uintptr_t *)&cq->cqe_daddr);
+        (struct doca_gpunetio_ib_mlx5_cqe64 *)doca_gpu_dev_verbs_load_const(
+            (uintptr_t *)&cq->cqe_daddr);
     const uint32_t cqe_num = doca_gpu_dev_verbs_load_const(&cq->cqe_num);
     const uint64_t cqe_rsvd = doca_gpu_dev_verbs_load_const(&cq->cqe_rsvd);
     uint64_t cons_index_in_cq = cons_index + cqe_rsvd;
@@ -386,8 +381,7 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>
 __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_cq_device_at(
     struct doca_gpu_dev_verbs_cq *cq, uint64_t cons_index) {
-    int status = doca_priv_gpu_dev_verbs_poll_cq_device_at<resource_sharing_mode>(
-        cq, cons_index);
+    int status = doca_priv_gpu_dev_verbs_poll_cq_device_at<resource_sharing_mode>(cq, cons_index);
     if (status == 0) {
         doca_gpu_dev_verbs_fence_acquire_nvidia_nic();
         doca_gpu_dev_verbs_atomic_max<uint64_t, resource_sharing_mode>(&cq->cqe_ci, cons_index + 1);
@@ -417,7 +411,6 @@ __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_cq_host_at(
     return 0;
 }
 
-
 /**
  * @brief [Internal] Poll the Collapsed Completion Queue (CQ) at a specific index. This function
  * waits for the completion to arrive.
@@ -432,11 +425,11 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
           enum doca_gpu_dev_verbs_qp_type qp_type = DOCA_GPUNETIO_VERBS_QP_SQ>
 __device__ static __forceinline__ int doca_priv_gpu_dev_verbs_poll_cq_collapsed_at(
-    struct doca_gpu_dev_verbs_qp *qp, uint64_t cons_index,
-    uint64_t *new_cqe_ci) {
+    struct doca_gpu_dev_verbs_qp *qp, uint64_t cons_index, uint64_t *new_cqe_ci) {
     struct doca_gpu_dev_verbs_cq *cq = doca_gpu_dev_verbs_qp_get_cq<qp_type>(qp);
     struct doca_gpunetio_ib_mlx5_cqe64 *cqe64 =
-        (struct doca_gpunetio_ib_mlx5_cqe64 *)doca_gpu_dev_verbs_load_const((uintptr_t *)&cq->cqe_daddr);
+        (struct doca_gpunetio_ib_mlx5_cqe64 *)doca_gpu_dev_verbs_load_const(
+            (uintptr_t *)&cq->cqe_daddr);
     const uint32_t cqe_num = doca_gpu_dev_verbs_load_const(&cq->cqe_num);
     uint8_t opown;
     uint8_t opcode;
@@ -504,8 +497,7 @@ __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_cq_collapsed_at(
     if (status == 0) {
         struct doca_gpu_dev_verbs_cq *cq = doca_gpu_dev_verbs_qp_get_cq<qp_type>(qp);
         doca_gpu_dev_verbs_fence_acquire_nvidia_nic();
-        doca_gpu_dev_verbs_atomic_max<uint64_t, resource_sharing_mode>(
-            &(cq->cqe_ci), new_cqe_ci);
+        doca_gpu_dev_verbs_atomic_max<uint64_t, resource_sharing_mode>(&(cq->cqe_ci), new_cqe_ci);
     }
     return status;
 }
@@ -513,29 +505,26 @@ __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_cq_collapsed_at(
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
           enum doca_gpu_dev_verbs_qp_type qp_type = DOCA_GPUNETIO_VERBS_QP_SQ,
-          enum doca_gpu_dev_verbs_cq_type cq_type =
-              DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_cq_at(
     struct doca_gpu_dev_verbs_qp *qp, uint64_t cons_index) {
     struct doca_gpu_dev_verbs_cq *cq = doca_gpu_dev_verbs_qp_get_cq<qp_type>(qp);
     enum doca_gpu_dev_verbs_cq_type mode = cq_type;
     if (cq_type == DOCA_GPUNETIO_VERBS_CQ_UNKNOWN) {
-        mode = (enum doca_gpu_dev_verbs_cq_type)doca_gpu_dev_verbs_load_const(
-            (uint8_t *)&cq->cq_type);
+        mode =
+            (enum doca_gpu_dev_verbs_cq_type)doca_gpu_dev_verbs_load_const((uint8_t *)&cq->cq_type);
     }
 
     if (mode == DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED_HOST) {
         return doca_gpu_dev_verbs_poll_cq_host_at<resource_sharing_mode>(cq, cons_index);
-    }
-    else if (mode == DOCA_GPUNETIO_VERBS_CQ_64B) {
+    } else if (mode == DOCA_GPUNETIO_VERBS_CQ_64B) {
         return doca_gpu_dev_verbs_poll_cq_device_at<resource_sharing_mode>(cq, cons_index);
-    }
-    else if (mode == DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED) {
-        return doca_gpu_dev_verbs_poll_cq_collapsed_at<resource_sharing_mode, qp_type>(qp, cons_index);
+    } else if (mode == DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED) {
+        return doca_gpu_dev_verbs_poll_cq_collapsed_at<resource_sharing_mode, qp_type>(qp,
+                                                                                       cons_index);
     }
     return EINVAL;
 }
-
 
 /**
  * @brief Poll the Completion Queue (CQ). This function waits for the completion to arrive.
@@ -548,8 +537,7 @@ __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_cq_at(
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
           enum doca_gpu_dev_verbs_qp_type qp_type = DOCA_GPUNETIO_VERBS_QP_SQ,
-          enum doca_gpu_dev_verbs_cq_type cq_type =
-              DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_cq(struct doca_gpu_dev_verbs_qp *qp,
                                                                  uint32_t count) {
     [[unlikely]] if (count == 0)
@@ -557,8 +545,7 @@ __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_cq(struct doca_gpu
     struct doca_gpu_dev_verbs_cq *cq = doca_gpu_dev_verbs_qp_get_cq<qp_type>(qp);
     uint64_t cons_index =
         doca_gpu_dev_verbs_load_relaxed<resource_sharing_mode>(&cq->cqe_ci) + count - 1;
-    return doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode, qp_type, cq_type>(
-        qp, cons_index);
+    return doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode, qp_type, cq_type>(qp, cons_index);
 }
 
 /**

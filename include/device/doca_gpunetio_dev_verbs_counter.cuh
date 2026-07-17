@@ -67,7 +67,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_submit_db_multi_qps_no
                     &qps[i]->sq_wqe_pi, prod_indices[i]);
             if (old_prod_indices[i] < prod_indices[i]) {
                 // Early rining of the DB to push WQEs to the NIC ASAP.
-                __be64 *db_ptr = (__be64 *)doca_gpu_dev_verbs_load_const((uintptr_t *)&qps[i]->sq_db);
+                __be64 *db_ptr =
+                    (__be64 *)doca_gpu_dev_verbs_load_const((uintptr_t *)&qps[i]->sq_db);
                 db_vals[i] = doca_gpu_dev_verbs_prepare_db(qps[i], prod_indices[i]);
 
 #ifdef DOCA_GPUNETIO_VERBS_HAS_ASYNC_STORE_RELEASE
@@ -123,7 +124,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_submit_db_multi_qps(
                     &qps[i]->sq_wqe_pi, prod_indices[i]);
             if (old_prod_indices[i] < prod_indices[i]) {
                 // Early rining of the DB to push WQEs to the NIC ASAP.
-                __be64 *db_ptr = (__be64 *)doca_gpu_dev_verbs_load_const((uintptr_t *)&qps[i]->sq_db);
+                __be64 *db_ptr =
+                    (__be64 *)doca_gpu_dev_verbs_load_const((uintptr_t *)&qps[i]->sq_db);
                 db_vals[i] = doca_gpu_dev_verbs_prepare_db(qps[i], prod_indices[i]);
 
 #ifdef DOCA_GPUNETIO_VERBS_HAS_ASYNC_STORE_RELEASE
@@ -161,7 +163,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_submit_db_multi_qps(
                 // In case the recovery path is triggered, the later DB ringing will cover for
                 // correctness.
                 doca_priv_gpu_dev_verbs_update_dbr(qps[i], prod_indices[i]);
-                __be64 *db_ptr = (__be64 *)doca_gpu_dev_verbs_load_const((uintptr_t *)&qps[i]->sq_db);
+                __be64 *db_ptr =
+                    (__be64 *)doca_gpu_dev_verbs_load_const((uintptr_t *)&qps[i]->sq_db);
 #ifdef DOCA_GPUNETIO_VERBS_HAS_ASYNC_STORE_RELEASE
                 if (code_opt & DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_ASYNC_STORE_RELEASE) {
                     doca_gpu_dev_verbs_async_store_release((uint64_t *)db_ptr,
@@ -216,7 +219,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_submit_multi_qps(
     DOCA_GPUNETIO_VERBS_ASSERT(num_qps >= 2);
     if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO) {
         const enum doca_gpu_dev_verbs_nic_handler qp_nic_handler =
-            (enum doca_gpu_dev_verbs_nic_handler)doca_gpu_dev_verbs_load_const((int *)&qps[0]->nic_handler);
+            (enum doca_gpu_dev_verbs_nic_handler)doca_gpu_dev_verbs_load_const(
+                (int *)&qps[0]->nic_handler);
         if (qp_nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB)
             doca_gpu_dev_verbs_submit_db_multi_qps<num_qps, resource_sharing_mode, sync_scope>(
                 qps, prod_indices, code_opt);
@@ -266,7 +270,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_counter(
     // DOCA_GPUNETIO_VERBS_ASSERT(qp->mem_type == DOCA_GPUNETIO_VERBS_MEM_TYPE_GPU);
 
     base_wqe_idx =
-        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, num_chunks, code_opt);
+        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                            cq_type>(qp, num_chunks, code_opt);
 #pragma unroll 1
     for (uint64_t i = 0; i < num_chunks; i++) {
         wqe_idx = base_wqe_idx + i;
@@ -278,12 +283,14 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_counter(
         [[likely]] if (size_ > 0) {
             doca_gpu_dev_verbs_wqe_prepare_write(
                 qp, wqe_ptr, wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_RDMA_WRITE,
-                doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt), 0,
-                raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
+                doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+                0, raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
                 laddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), laddr.key, size_);
         } else {
-            doca_gpu_dev_verbs_wqe_prepare_nop(qp, wqe_ptr, wqe_idx,
-                                               doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt));
+            doca_gpu_dev_verbs_wqe_prepare_nop(
+                qp, wqe_ptr, wqe_idx,
+                doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp,
+                                                                                      code_opt));
         }
         remaining_size -= size_;
     }
@@ -291,20 +298,25 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_counter(
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, base_wqe_idx, wqe_idx);
 
     uint64_t companion_base_wqe_idx =
-        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(companion_qp, 2, code_opt);
+        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                            cq_type>(companion_qp, 2, code_opt);
     uint64_t companion_wqe_idx = companion_base_wqe_idx;
 
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(companion_qp, companion_wqe_idx);
-    doca_gpu_dev_verbs_wqe_prepare_wait(companion_qp, wqe_ptr, companion_wqe_idx,
-                                        doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt), wqe_idx,
-                                        qp->cq_sq.cq_num);
+    doca_gpu_dev_verbs_wqe_prepare_wait(
+        companion_qp, wqe_ptr, companion_wqe_idx,
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(companion_qp,
+                                                                              code_opt),
+        wqe_idx, qp->cq_sq.cq_num);
 
     ++companion_wqe_idx;
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(companion_qp, companion_wqe_idx);
     doca_gpu_dev_verbs_wqe_prepare_atomic(
         companion_qp, wqe_ptr, companion_wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_ATOMIC_FA,
-        doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt), counter_raddr.addr, counter_raddr.key,
-        counter_laddr.addr, counter_laddr.key, sizeof(uint64_t), counter_val, 0);
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(companion_qp,
+                                                                              code_opt),
+        counter_raddr.addr, counter_raddr.key, counter_laddr.addr, counter_laddr.key,
+        sizeof(uint64_t), counter_val, 0);
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(companion_qp, companion_base_wqe_idx,
                                                               companion_wqe_idx);
 
@@ -339,30 +351,37 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_p_counter(
     DOCA_GPUNETIO_VERBS_ASSERT(qp != NULL);
     // DOCA_GPUNETIO_VERBS_ASSERT(qp->mem_type == DOCA_GPUNETIO_VERBS_MEM_TYPE_GPU);
 
-    wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, 1, code_opt);
+    wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                                  cq_type>(qp, 1, code_opt);
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
 
-    doca_gpu_dev_verbs_prepare_inl_rdma_write_wqe_header(qp, wqe_ptr, wqe_idx,
-                                                         doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt),
-                                                         raddr.addr, raddr.key, sizeof(T));
+    doca_gpu_dev_verbs_prepare_inl_rdma_write_wqe_header(
+        qp, wqe_ptr, wqe_idx,
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+        raddr.addr, raddr.key, sizeof(T));
     doca_gpu_dev_verbs_prepare_inl_rdma_write_wqe_data<T>(qp, wqe_ptr, value);
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, wqe_idx, wqe_idx);
 
     uint64_t companion_base_wqe_idx =
-        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(companion_qp, 2, code_opt);
+        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                            cq_type>(companion_qp, 2, code_opt);
     uint64_t companion_wqe_idx = companion_base_wqe_idx;
 
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(companion_qp, companion_wqe_idx);
-    doca_gpu_dev_verbs_wqe_prepare_wait(companion_qp, wqe_ptr, companion_wqe_idx,
-                                        doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt), wqe_idx,
-                                        qp->cq_sq.cq_num);
+    doca_gpu_dev_verbs_wqe_prepare_wait(
+        companion_qp, wqe_ptr, companion_wqe_idx,
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(companion_qp,
+                                                                              code_opt),
+        wqe_idx, qp->cq_sq.cq_num);
 
     ++companion_wqe_idx;
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(companion_qp, companion_wqe_idx);
     doca_gpu_dev_verbs_wqe_prepare_atomic(
         companion_qp, wqe_ptr, companion_wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_ATOMIC_FA,
-        doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt), counter_raddr.addr, counter_raddr.key,
-        counter_laddr.addr, counter_laddr.key, sizeof(uint64_t), counter_val, 0);
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(companion_qp,
+                                                                              code_opt),
+        counter_raddr.addr, counter_raddr.key, counter_laddr.addr, counter_laddr.key,
+        sizeof(uint64_t), counter_val, 0);
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(companion_qp, companion_base_wqe_idx,
                                                               companion_wqe_idx);
 
@@ -407,7 +426,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal_counter(
 
     // Put
     base_wqe_idx =
-        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, num_chunks + 1, code_opt);
+        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                            cq_type>(qp, num_chunks + 1, code_opt);
 #pragma unroll 1
     for (uint64_t i = 0; i < num_chunks; i++) {
         wqe_idx = base_wqe_idx + i;
@@ -419,12 +439,14 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal_counter(
         [[likely]] if (size_ > 0) {
             doca_gpu_dev_verbs_wqe_prepare_write(
                 qp, wqe_ptr, wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_RDMA_WRITE,
-                doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt), 0,
-                raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
+                doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+                0, raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
                 laddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), laddr.key, size_);
         } else {
-            doca_gpu_dev_verbs_wqe_prepare_nop(qp, wqe_ptr, wqe_idx,
-                                               doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt));
+            doca_gpu_dev_verbs_wqe_prepare_nop(
+                qp, wqe_ptr, wqe_idx,
+                doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp,
+                                                                                      code_opt));
         }
         remaining_size -= size_;
     }
@@ -434,27 +456,32 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal_counter(
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
     doca_gpu_dev_verbs_wqe_prepare_atomic(
         qp, wqe_ptr, wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_ATOMIC_FA,
-        doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt), sig_raddr.addr, sig_raddr.key, sig_laddr.addr,
-        sig_laddr.key, sizeof(uint64_t), sig_val, 0);
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+        sig_raddr.addr, sig_raddr.key, sig_laddr.addr, sig_laddr.key, sizeof(uint64_t), sig_val, 0);
 
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, base_wqe_idx, wqe_idx);
 
     // Counter
     uint64_t companion_base_wqe_idx =
-        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(companion_qp, 2, code_opt);
+        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                            cq_type>(companion_qp, 2, code_opt);
     uint64_t companion_wqe_idx = companion_base_wqe_idx;
 
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(companion_qp, companion_wqe_idx);
-    doca_gpu_dev_verbs_wqe_prepare_wait(companion_qp, wqe_ptr, companion_wqe_idx,
-                                        doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt), wqe_idx,
-                                        qp->cq_sq.cq_num);
+    doca_gpu_dev_verbs_wqe_prepare_wait(
+        companion_qp, wqe_ptr, companion_wqe_idx,
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(companion_qp,
+                                                                              code_opt),
+        wqe_idx, qp->cq_sq.cq_num);
 
     ++companion_wqe_idx;
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(companion_qp, companion_wqe_idx);
     doca_gpu_dev_verbs_wqe_prepare_atomic(
         companion_qp, wqe_ptr, companion_wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_ATOMIC_FA,
-        doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt), counter_raddr.addr, counter_raddr.key,
-        counter_laddr.addr, counter_laddr.key, sizeof(uint64_t), counter_val, 0);
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(companion_qp,
+                                                                              code_opt),
+        counter_raddr.addr, counter_raddr.key, counter_laddr.addr, counter_laddr.key,
+        sizeof(uint64_t), counter_val, 0);
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(companion_qp, companion_base_wqe_idx,
                                                               companion_wqe_idx);
 
@@ -491,31 +518,37 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_signal_counter(
     // DOCA_GPUNETIO_VERBS_ASSERT(qp->mem_type == DOCA_GPUNETIO_VERBS_MEM_TYPE_GPU);
 
     // Signal
-    wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, 1, code_opt);
+    wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                                  cq_type>(qp, 1, code_opt);
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
     doca_gpu_dev_verbs_wqe_prepare_atomic(
         qp, wqe_ptr, wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_ATOMIC_FA,
-        doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt), sig_raddr.addr, sig_raddr.key, sig_laddr.addr,
-        sig_laddr.key, sizeof(uint64_t), sig_val, 0);
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+        sig_raddr.addr, sig_raddr.key, sig_laddr.addr, sig_laddr.key, sizeof(uint64_t), sig_val, 0);
 
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, wqe_idx, wqe_idx);
 
     // Counter
     uint64_t companion_base_wqe_idx =
-        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(companion_qp, 2, code_opt);
+        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                            cq_type>(companion_qp, 2, code_opt);
     uint64_t companion_wqe_idx = companion_base_wqe_idx;
 
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(companion_qp, companion_wqe_idx);
-    doca_gpu_dev_verbs_wqe_prepare_wait(companion_qp, wqe_ptr, companion_wqe_idx,
-                                        doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt), wqe_idx,
-                                        qp->cq_sq.cq_num);
+    doca_gpu_dev_verbs_wqe_prepare_wait(
+        companion_qp, wqe_ptr, companion_wqe_idx,
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(companion_qp,
+                                                                              code_opt),
+        wqe_idx, qp->cq_sq.cq_num);
 
     ++companion_wqe_idx;
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(companion_qp, companion_wqe_idx);
     doca_gpu_dev_verbs_wqe_prepare_atomic(
         companion_qp, wqe_ptr, companion_wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_ATOMIC_FA,
-        doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt), counter_raddr.addr, counter_raddr.key,
-        counter_laddr.addr, counter_laddr.key, sizeof(uint64_t), counter_val, 0);
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(companion_qp,
+                                                                              code_opt),
+        counter_raddr.addr, counter_raddr.key, counter_laddr.addr, counter_laddr.key,
+        sizeof(uint64_t), counter_val, 0);
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(companion_qp, companion_base_wqe_idx,
                                                               companion_wqe_idx);
 
@@ -552,7 +585,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_counter(
     num_chunks = num_chunks > 1 ? num_chunks : 1;
 
     base_wqe_idx =
-        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, num_chunks, code_opt);
+        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                            cq_type>(qp, num_chunks, code_opt);
 #pragma unroll 1
     for (uint64_t i = 0; i < num_chunks; i++) {
         wqe_idx = base_wqe_idx + i;
@@ -563,12 +597,15 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_counter(
 
         [[likely]] if (size_ > 0) {
             doca_gpu_dev_verbs_wqe_prepare_read(
-                qp, wqe_ptr, wqe_idx, doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt),
+                qp, wqe_ptr, wqe_idx,
+                doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
                 raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
                 laddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), laddr.key, size_);
         } else {
-            doca_gpu_dev_verbs_wqe_prepare_nop(qp, wqe_ptr, wqe_idx,
-                                               doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt));
+            doca_gpu_dev_verbs_wqe_prepare_nop(
+                qp, wqe_ptr, wqe_idx,
+                doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp,
+                                                                                      code_opt));
         }
         remaining_size -= size_;
     }
@@ -576,20 +613,25 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_counter(
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, base_wqe_idx, wqe_idx);
 
     uint64_t companion_base_wqe_idx =
-        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(companion_qp, 2, code_opt);
+        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                            cq_type>(companion_qp, 2, code_opt);
     uint64_t companion_wqe_idx = companion_base_wqe_idx;
 
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(companion_qp, companion_wqe_idx);
-    doca_gpu_dev_verbs_wqe_prepare_wait(companion_qp, wqe_ptr, companion_wqe_idx,
-                                        doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt), wqe_idx,
-                                        qp->cq_sq.cq_num);
+    doca_gpu_dev_verbs_wqe_prepare_wait(
+        companion_qp, wqe_ptr, companion_wqe_idx,
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(companion_qp,
+                                                                              code_opt),
+        wqe_idx, qp->cq_sq.cq_num);
 
     ++companion_wqe_idx;
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(companion_qp, companion_wqe_idx);
     doca_gpu_dev_verbs_wqe_prepare_atomic(
         companion_qp, wqe_ptr, companion_wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_ATOMIC_FA,
-        doca_gpu_dev_verbs_cqe_ctrl_flags<cq_type>(code_opt), counter_raddr.addr, counter_raddr.key,
-        counter_laddr.addr, counter_laddr.key, sizeof(uint64_t), counter_val, 0);
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(companion_qp,
+                                                                              code_opt),
+        counter_raddr.addr, counter_raddr.key, counter_laddr.addr, counter_laddr.key,
+        sizeof(uint64_t), counter_val, 0);
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(companion_qp, companion_base_wqe_idx,
                                                               companion_wqe_idx);
 

@@ -247,6 +247,7 @@ doca_error_t verbs_server(struct verbs_config *cfg) {
     ret = oob_verbs_connection_server_setup(&server_sock_fd, &resources.conn_socket);
     if (ret != 0) {
         DOCA_LOG(LOG_ERR, "Failed to setup OOB connection with remote peer: %d", ret);
+        status = DOCA_ERROR_CONNECTION_ABORTED;
         goto server_cleanup;
     }
 
@@ -321,6 +322,7 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
     ret = oob_verbs_connection_client_setup(cfg->server_ip_addr.c_str(), &resources.conn_socket);
     if (ret != 0) {
         DOCA_LOG(LOG_ERR, "Failed to setup OOB connection with remote peer: %d", ret);
+        status = DOCA_ERROR_CONNECTION_ABORTED;
         goto client_cleanup;
     }
 
