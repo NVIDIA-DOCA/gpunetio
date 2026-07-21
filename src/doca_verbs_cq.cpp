@@ -1055,7 +1055,7 @@ doca_error_t doca_verbs_comp_channel_create(const doca_dev_t *net_dev,
     if (net_dev->open == nullptr) {
         DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ open instance provided at %s line %d.", __func__,
                  __LINE__);
-        return DOCA_ERROR_INVALID_VALUE;
+        goto exit_error;
     }
 
     /* In case of DOCA_SDK_WRAPPER_NOT_FOUND or DOCA_SDK_WRAPPER_NOT_SUPPORTED, just rely on open
