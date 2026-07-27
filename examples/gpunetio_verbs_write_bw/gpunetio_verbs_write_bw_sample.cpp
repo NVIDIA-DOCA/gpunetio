@@ -482,8 +482,9 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
                     DOCA_LOG(LOG_ERR, "Error in doca_verbs_ack_cq_events");
                     goto stop_thread;
                 }
-            }
-            else if (status != DOCA_SUCCESS && status != DOCA_ERROR_AGAIN) {
+            } else if (status == DOCA_ERROR_AGAIN) {
+                status = DOCA_SUCCESS;
+            } else if (status != DOCA_SUCCESS && status != DOCA_ERROR_AGAIN) {
                 DOCA_LOG(LOG_ERR, "Error in doca_verbs_get_cq_comp_channel_event");
                 goto stop_thread;
             }
