@@ -95,8 +95,8 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
 
         /* Try with dmabuf mapping first. If it doesn't work, fallback to legacy nvidia-peermem
          * method. */
-        status = doca_gpu_get_dmabuf_fd(resources->gpu_dev, resources->local_poll_buf[idx], size_data,
-                                    &dmabuf_fd);
+        status = doca_gpu_get_dmabuf_fd(resources->gpu_dev, resources->local_poll_buf[idx],
+                                        size_data, &dmabuf_fd);
         if (status == DOCA_SUCCESS) {
             resources->local_poll_mr[idx] = ibv_reg_dmabuf_mr(
                 resources->verbs_pd, 0, size_data, (uint64_t)resources->local_poll_buf[idx],
@@ -127,8 +127,8 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
 
         /* Try with dmabuf mapping first. If it doesn't work, fallback to legacy nvidia-peermem
          * method. */
-        status = doca_gpu_get_dmabuf_fd(resources->gpu_dev, resources->local_post_buf[idx], size_data,
-                                    &dmabuf_fd);
+        status = doca_gpu_get_dmabuf_fd(resources->gpu_dev, resources->local_post_buf[idx],
+                                        size_data, &dmabuf_fd);
         if (status == DOCA_SUCCESS) {
             resources->local_post_mr[idx] = ibv_reg_dmabuf_mr(
                 resources->verbs_pd, 0, size_data, (uint64_t)resources->local_post_buf[idx],
@@ -284,8 +284,9 @@ doca_error_t verbs_server(struct verbs_config *cfg) {
     }
 
     ret = oob_verbs_connection_server_setup(&server_sock_fd, &resources.conn_socket);
-    if (ret != DOCA_SUCCESS) {
+    if (ret != 0) {
         DOCA_LOG(LOG_ERR, "Failed to setup OOB connection with remote peer: %d", ret);
+        status = DOCA_ERROR_CONNECTION_ABORTED;
         goto server_cleanup;
     }
 
@@ -474,8 +475,9 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
     }
 
     ret = oob_verbs_connection_client_setup(cfg->server_ip_addr.c_str(), &resources.conn_socket);
-    if (ret != DOCA_SUCCESS) {
+    if (ret != 0) {
         DOCA_LOG(LOG_ERR, "Failed to setup OOB connection with remote peer: %d", ret);
+        status = DOCA_ERROR_CONNECTION_ABORTED;
         goto client_cleanup;
     }
 

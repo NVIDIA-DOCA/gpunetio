@@ -70,12 +70,12 @@ typedef struct gdr_mh_s {
         }                                                                                      \
     } while (0)
 
-#define DOCA_GPUNETIO_GDRCOPY_TRY_LOAD_SYM(handle, symbol, funcptr) \
-    do {                                                            \
-        funcptr = (TYPEOF(funcptr))dlsym(handle, symbol);           \
-        if (!funcptr) {                                             \
-            DOCA_LOG(LOG_WARNING, "Cannot load symbol %s, ignoring...", symbol);              \
-        }                                                           \
+#define DOCA_GPUNETIO_GDRCOPY_TRY_LOAD_SYM(handle, symbol, funcptr)              \
+    do {                                                                         \
+        funcptr = (TYPEOF(funcptr))dlsym(handle, symbol);                        \
+        if (!funcptr) {                                                          \
+            DOCA_LOG(LOG_WARNING, "Cannot load symbol %s, ignoring...", symbol); \
+        }                                                                        \
     } while (0)
 
 typedef enum gdr_pin_flags {
@@ -84,14 +84,15 @@ typedef enum gdr_pin_flags {
 } gdr_pin_flags_t;
 
 typedef enum gdr_attr {
-    GDR_ATTR_USE_PERSISTENT_MAPPING = 1,    // Query whether gdrdrv uses persistent mapping
-                                            // or traditional (non-persistent) mapping.
+    GDR_ATTR_USE_PERSISTENT_MAPPING = 1,  // Query whether gdrdrv uses persistent mapping
+                                          // or traditional (non-persistent) mapping.
 
-    GDR_ATTR_SUPPORT_PIN_FLAG_FORCE_PCIE = 2, // Return non-zero if both gdrdrv and the GPU driver
-                                              // support the GDR_PIN_FLAG_FORCE_PCIE feature.
-                                              // Note that passing the flag may still lead to a run-time error,
-                                              // for example when running on unsupported platforms.
-    GDR_ATTR_USING_DMA_BUF_MMAP = 3, // Return non-zero if gdrcopy is using dma-buf mmap backend.
+    GDR_ATTR_SUPPORT_PIN_FLAG_FORCE_PCIE =
+        2,  // Return non-zero if both gdrdrv and the GPU driver
+            // support the GDR_PIN_FLAG_FORCE_PCIE feature.
+            // Note that passing the flag may still lead to a run-time error,
+            // for example when running on unsupported platforms.
+    GDR_ATTR_USING_DMA_BUF_MMAP = 3,  // Return non-zero if gdrcopy is using dma-buf mmap backend.
     // For internal use only
     GDR_ATTR_MAX
 } gdr_attr_t;
@@ -102,7 +103,8 @@ struct doca_gpu_gdrcopy_function_table {
     int (*close)(gdr_t g);
     int (*pin_buffer)(gdr_t g, unsigned long addr, size_t size, uint64_t p2p_token,
                       uint32_t va_space, gdr_mh_t *handle);
-    int (*pin_buffer_v2)(gdr_t g, unsigned long addr, size_t size, uint32_t flags, gdr_mh_t *handle);
+    int (*pin_buffer_v2)(gdr_t g, unsigned long addr, size_t size, uint32_t flags,
+                         gdr_mh_t *handle);
     int (*unpin_buffer)(gdr_t g, gdr_mh_t handle);
     int (*map)(gdr_t g, gdr_mh_t handle, void **va, size_t size);
     int (*unmap)(gdr_t g, gdr_mh_t handle, void *va, size_t size);
@@ -128,8 +130,8 @@ static int doca_gpu_gdrcopy_ftable_init(struct doca_gpu_gdrcopy_function_table *
         goto out;
     }
 
-    table = (struct doca_gpu_gdrcopy_function_table *)calloc(1,
-        sizeof(struct doca_gpu_gdrcopy_function_table));
+    table = (struct doca_gpu_gdrcopy_function_table *)calloc(
+        1, sizeof(struct doca_gpu_gdrcopy_function_table));
     if (!table) {
         DOCA_LOG(LOG_ERR, "Failed to allocate memory for gdrcopy function table");
         status = ENOMEM;
@@ -215,10 +217,12 @@ bool doca_gpu_gdrcopy_is_supported() {
 bool doca_gpu_gdrcopy_supports_force_pcie() {
     if (!doca_gpu_gdrcopy_is_supported()) return false;
     if (!doca_gpu_gdrcopy_ftable || !doca_gpu_gdrcopy_ftable->handle) return false;
-    if (!doca_gpu_gdrcopy_ftable->get_attribute || !doca_gpu_gdrcopy_ftable->pin_buffer_v2) return false;
+    if (!doca_gpu_gdrcopy_ftable->get_attribute || !doca_gpu_gdrcopy_ftable->pin_buffer_v2)
+        return false;
 
     int supported = 0;
-    int rc = doca_gpu_gdrcopy_ftable->get_attribute(doca_gpu_gdr, GDR_ATTR_SUPPORT_PIN_FLAG_FORCE_PCIE, &supported);
+    int rc = doca_gpu_gdrcopy_ftable->get_attribute(
+        doca_gpu_gdr, GDR_ATTR_SUPPORT_PIN_FLAG_FORCE_PCIE, &supported);
     if (rc != 0 || supported == 0) {
         DOCA_LOG(LOG_INFO, "GDRCopy forced-PCIe attribute unsupported (rc=%d value=%d)", rc,
                  supported);
@@ -227,9 +231,8 @@ bool doca_gpu_gdrcopy_supports_force_pcie() {
     return true;
 }
 
-static int priv_doca_gpu_gdrcopy_create_mapping(void *dev_aligned_ptr, size_t size,
-                                                bool force_pcie, gdr_mh_t *out_mh,
-                                                void **out_host_ptr) {
+static int priv_doca_gpu_gdrcopy_create_mapping(void *dev_aligned_ptr, size_t size, bool force_pcie,
+                                                gdr_mh_t *out_mh, void **out_host_ptr) {
     int status = 0;
     gdr_mh_t mh;
     void *host_ptr;
@@ -248,7 +251,8 @@ static int priv_doca_gpu_gdrcopy_create_mapping(void *dev_aligned_ptr, size_t si
             status = ENOTSUP;
             goto out;
         }
-        status = doca_gpu_gdrcopy_ftable->pin_buffer_v2(doca_gpu_gdr, (unsigned long)dev_aligned_ptr, size, GDR_PIN_FLAG_FORCE_PCIE, &mh);
+        status = doca_gpu_gdrcopy_ftable->pin_buffer_v2(
+            doca_gpu_gdr, (unsigned long)dev_aligned_ptr, size, GDR_PIN_FLAG_FORCE_PCIE, &mh);
     } else {
         status = doca_gpu_gdrcopy_ftable->pin_buffer(doca_gpu_gdr, (unsigned long)dev_aligned_ptr,
                                                      size, 0, 0, &mh);
@@ -275,8 +279,8 @@ out:
     return status;
 }
 
-int doca_gpu_gdrcopy_create_mapping(void *dev_aligned_ptr, size_t size, bool force_pcie, void **out_mh,
-                                    void **out_host_ptr) {
+int doca_gpu_gdrcopy_create_mapping(void *dev_aligned_ptr, size_t size, bool force_pcie,
+                                    void **out_mh, void **out_host_ptr) {
     int status = 0;
     gdr_mh_t *mh = NULL;
     mh = (gdr_mh_t *)malloc(sizeof(gdr_mh_t));
@@ -286,8 +290,8 @@ int doca_gpu_gdrcopy_create_mapping(void *dev_aligned_ptr, size_t size, bool for
         goto out;
     }
 
-    status = priv_doca_gpu_gdrcopy_create_mapping(dev_aligned_ptr, size, force_pcie, mh,
-                                                  out_host_ptr);
+    status =
+        priv_doca_gpu_gdrcopy_create_mapping(dev_aligned_ptr, size, force_pcie, mh, out_host_ptr);
     if (status) {
         DOCA_LOG(LOG_ERR, "Error in priv_doca_gpu_gdrcopy_create_mapping");
         goto out;

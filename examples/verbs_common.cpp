@@ -41,7 +41,7 @@
  *
  * @oob_sock_fd [out]: Socket FD
  * @oob_client_sock [out]: Client socket FD
- * @return: positive integer on success and -1 otherwise
+ * @return: 0 on success and -1 otherwise
  */
 int oob_verbs_connection_server_setup(int *oob_sock_fd, int *oob_client_sock) {
     struct sockaddr_in server_addr = {0}, client_addr = {0};
@@ -109,7 +109,6 @@ int oob_verbs_connection_server_setup(int *oob_sock_fd, int *oob_client_sock) {
  *
  * @oob_sock_fd [in]: Socket FD
  * @oob_client_sock [in]: Client socket FD
- * @return: positive integer on success and -1 otherwise
  */
 void oob_verbs_connection_server_close(int oob_sock_fd, int oob_client_sock) {
     if (oob_client_sock > 0) close(oob_client_sock);
@@ -122,7 +121,7 @@ void oob_verbs_connection_server_close(int oob_sock_fd, int oob_client_sock) {
  *
  * @server_ip [in]: Server IP address to connect
  * @oob_sock_fd [out]: Socket FD
- * @return: positive integer on success and -1 otherwise
+ * @return: 0 on success and -1 otherwise
  */
 int oob_verbs_connection_client_setup(const char *server_ip, int *oob_sock_fd) {
     struct sockaddr_in server_addr = {0};
@@ -157,7 +156,6 @@ int oob_verbs_connection_client_setup(const char *server_ip, int *oob_sock_fd) {
  * OOB connection to exchange RDMA info - client side closure
  *
  * @oob_sock_fd [in]: Socket FD
- * @return: positive integer on success and -1 otherwise
  */
 void oob_verbs_connection_client_close(int oob_sock_fd) {
     if (oob_sock_fd > 0) close(oob_sock_fd);
@@ -238,7 +236,7 @@ doca_error_t create_verbs_resources(struct verbs_config *cfg, struct verbs_resou
     union ibv_gid rgid;
     int ret = 0;
     struct ibv_port_attr port_attr;
-    struct doca_gpu_verbs_qp_init_attr_hl qp_init;
+    struct doca_gpu_verbs_qp_init_attr_hl qp_init = {};
     int cuda_id = 0;
     cudaError_t cuda_ret;
 
@@ -322,9 +320,23 @@ doca_error_t create_verbs_resources(struct verbs_config *cfg, struct verbs_resou
     qp_init.nic_handler = resources->nic_handler;
     qp_init.mreg_type = DOCA_GPUNETIO_VERBS_MEM_REG_TYPE_DEFAULT;
     qp_init.send_dbr_mode_ext = resources->send_dbr_mode_ext;
+    qp_init.cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN;
     qp_init.cq_collapsed = resources->cq_collapsed;
     qp_init.ordering_semantic = DOCA_VERBS_QP_ORDERING_SEMANTIC_IBTA;
     qp_init.enable_umem_cpu = resources->enable_umem_cpu;
+
+    if (resources->enable_comp_channel) {
+        status = doca_verbs_comp_channel_create(resources->net_dev, &resources->comp_channel);
+        if (status == DOCA_ERROR_NOT_SUPPORTED) {
+            DOCA_LOG(LOG_WARNING, "DOCA SDK version doesn't support Verbs comp channel feature");
+            resources->comp_channel = nullptr;
+        } else if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed doca_verbs_comp_channel_create with %d", status);
+            goto destroy_resources;
+        }
+    }
+
+    qp_init.comp_channel = resources->comp_channel;
 
     status = doca_gpu_verbs_create_qp_hl(&qp_init, &(resources->qp));
     if (status != DOCA_SUCCESS) {
@@ -355,6 +367,14 @@ doca_error_t destroy_verbs_resources(struct verbs_resources *resources) {
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to destroy doca verbs high-level qp");
         return status;
+    }
+
+    if (resources->comp_channel) {
+        status = doca_verbs_comp_channel_destroy(resources->comp_channel);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to destroy doca verbs comp_channel: %d", status);
+            return status;
+        }
     }
 
     if (resources->verbs_ah_attr) {

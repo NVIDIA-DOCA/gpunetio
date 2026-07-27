@@ -190,7 +190,9 @@ typedef doca_error_t (*doca_verbs_bridge_verbs_context_import_t)(struct ibv_cont
                                                                  uint32_t flags,
                                                                  void **verbs_context);
 
+#if DOCA_VERBS_QP_SDK_WRAPPER_ENABLE_DEBUG == 1
 typedef doca_error_t (*doca_log_backend_create_with_file_sdk_t)(FILE *fptr, void **backend);
+#endif
 
 /* Global function pointers */
 static doca_verbs_qp_init_attr_create_t p_doca_verbs_qp_init_attr_create = nullptr;
@@ -285,7 +287,9 @@ static doca_rdma_bridge_get_dev_pd_t p_doca_rdma_bridge_get_dev_pd = nullptr;
 static doca_verbs_bridge_verbs_pd_import_t p_doca_verbs_bridge_verbs_pd_import = nullptr;
 static doca_verbs_bridge_verbs_context_import_t p_doca_verbs_bridge_verbs_context_import = nullptr;
 
+#if DOCA_VERBS_QP_SDK_WRAPPER_ENABLE_DEBUG == 1
 static doca_log_backend_create_with_file_sdk_t p_doca_log_backend_create_with_file_sdk = nullptr;
+#endif
 
 static doca_verbs_qp_attr_set_cc_group_t p_doca_verbs_qp_attr_set_cc_group = nullptr;
 static doca_verbs_qp_attr_get_cc_group_t p_doca_verbs_qp_attr_get_cc_group = nullptr;
@@ -557,9 +561,11 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
         (doca_verbs_bridge_verbs_context_import_t)get_verbs_sdk_symbol(
             "doca_verbs_bridge_verbs_context_import");
 
+#if DOCA_VERBS_QP_SDK_WRAPPER_ENABLE_DEBUG == 1
     p_doca_log_backend_create_with_file_sdk =
         (doca_log_backend_create_with_file_sdk_t)get_verbs_sdk_symbol(
             "doca_log_backend_create_with_file_sdk");
+#endif
 
     /* Check if all symbols were found */
     /*
@@ -603,9 +609,7 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
         !p_doca_verbs_qp_create || !p_doca_verbs_qp_destroy || !p_doca_verbs_qp_modify ||
         !p_doca_verbs_qp_query || !p_doca_verbs_qp_get_wq ||
         !p_doca_verbs_qp_init_attr_get_qp_context || !p_doca_verbs_qp_get_dbr_addr ||
-        !p_doca_verbs_qp_get_uar_addr || !p_doca_verbs_qp_get_qpn ||
-
-        !p_doca_log_backend_create_with_file_sdk) {
+        !p_doca_verbs_qp_get_uar_addr || !p_doca_verbs_qp_get_qpn) {
         DOCA_LOG(LOG_ERR, "Failed to get all required DOCA Verbs Dev SDK symbols\n");
         dlclose(verbs_handle);
         verbs_handle = nullptr;
@@ -632,6 +636,17 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
         DOCA_LOG(LOG_WARNING,
                  "The DOCA SDK installed on the system doesn't provide CC group symbols "
                  "(doca_verbs_cc_group_* / query_cc_group_caps)\n");
+
+#if DOCA_VERBS_QP_SDK_WRAPPER_ENABLE_DEBUG == 1
+    if (!p_doca_log_backend_create_with_file_sdk) {
+        DOCA_LOG(LOG_ERR,
+                 "Failed to get doca_log_backend_create_with_file_sdk DOCA Verbs Dev SDK symbol\n");
+        dlclose(verbs_handle);
+        verbs_handle = nullptr;
+        *ret = -1;
+        goto exit_error;
+    }
+#endif
 
     *ret = 0;
     return;
