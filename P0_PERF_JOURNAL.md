@@ -80,6 +80,22 @@
 - Every final server log reported `Validation successfull! Data received correctly from client`.
 - Invalid depths, zero threads, and invalid WARP thread counts fail before resource creation.
 
+### E4 - Independent review hardening (2026-08-02)
+
+- Status: pass.
+- Upstream check: NVIDIA `main` remains `df883ff`; the checkpoint has no rebase drift.
+- Confirmed issue: P0 added the `-t` control, but the peers previously allocated and addressed
+  buffers from independently selected thread counts. A mismatched client could therefore address
+  beyond the server registration.
+- Fix: exchange a versioned PUT workload descriptor before RDMA metadata, reject mismatched
+  producer geometry, and use exact-length socket transfers so EOF and short I/O are failures.
+  The descriptor reserves stable fields for later QP-count and message-size selection.
+- Build: `make -j16 CUDA_ARCH=100` passed for the library and all examples.
+- Matched regression: one thread, depth four, 8192 operations passed; representative throughput
+  was 5.604 Gbps at 4 KiB, 89.656 Gbps at 64 KiB, and 392.916 Gbps at 1 MiB.
+- Negative test: server `-t 1` versus client `-t 2` made both peers exit nonzero with the explicit
+  configuration-mismatch diagnostic before QP connection or kernel launch.
+
 ## Decisions
 
 - Optimize one steady-state data-plane bottleneck, not broad control-plane cleanup.
