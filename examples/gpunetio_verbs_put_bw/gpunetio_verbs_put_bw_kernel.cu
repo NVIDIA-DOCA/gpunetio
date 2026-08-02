@@ -108,10 +108,106 @@ __global__ void put_bw(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, uin
     }
 }
 
+__device__ static __forceinline__ void post_put_bw(
+    struct doca_gpu_dev_verbs_qp *qp, uint32_t data_size, uint8_t *src_buf,
+    uint32_t src_buf_mkey, uint8_t *dst_buf, uint32_t dst_buf_mkey, uint32_t tidx,
+    doca_gpu_dev_verbs_ticket_t *ticket) {
+    doca_gpu_dev_verbs_put<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
+                           DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+                           DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD>(
+        qp,
+        doca_gpu_dev_verbs_addr{.addr = (uint64_t)(dst_buf + (data_size * tidx)),
+                                .key = (uint32_t)dst_buf_mkey},
+        doca_gpu_dev_verbs_addr{.addr = (uint64_t)(src_buf + (data_size * tidx)),
+                                .key = (uint32_t)src_buf_mkey},
+        data_size, ticket);
+}
+
+__device__ static __forceinline__ void poll_put_bw(struct doca_gpu_dev_verbs_qp *qp,
+                                                    doca_gpu_dev_verbs_ticket_t ticket) {
+    if (doca_gpu_dev_verbs_poll_cq_at<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(
+            qp, ticket) != 0) {
+#if ENABLE_DEBUG == 1
+        printf("Error CQE!\n");
+#endif
+    }
+}
+
+template <uint32_t window_depth>
+__global__ void put_bw_window(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters,
+                              uint32_t data_size, uint8_t *src_buf, uint32_t src_buf_mkey,
+                              uint8_t *dst_buf, uint32_t dst_buf_mkey) {
+    doca_gpu_dev_verbs_ticket_t tickets[window_depth];
+    const uint32_t tidx = threadIdx.x + (blockIdx.x * blockDim.x);
+    const uint32_t stride = blockDim.x * gridDim.x;
+    uint32_t next_idx = tidx;
+    uint32_t initial_depth = 0;
+
+#pragma unroll
+    for (uint32_t slot = 0; slot < window_depth; ++slot) {
+        if (next_idx >= num_iters)
+            break;
+
+        post_put_bw(qp, data_size, src_buf, src_buf_mkey, dst_buf, dst_buf_mkey, tidx,
+                    &tickets[slot]);
+        next_idx += stride;
+        ++initial_depth;
+    }
+
+    if (initial_depth != window_depth) {
+#pragma unroll
+        for (uint32_t slot = 0; slot < window_depth; ++slot) {
+            if (slot < initial_depth)
+                poll_put_bw(qp, tickets[slot]);
+        }
+        return;
+    }
+
+    while ((uint64_t)next_idx + ((uint64_t)window_depth - 1) * stride < num_iters) {
+#pragma unroll
+        for (uint32_t slot = 0; slot < window_depth; ++slot) {
+            poll_put_bw(qp, tickets[slot]);
+            post_put_bw(qp, data_size, src_buf, src_buf_mkey, dst_buf, dst_buf_mkey, tidx,
+                        &tickets[slot]);
+            next_idx += stride;
+        }
+    }
+
+    uint32_t tail_depth = 0;
+#pragma unroll
+    for (uint32_t slot = 0; slot < window_depth; ++slot) {
+        poll_put_bw(qp, tickets[slot]);
+
+        if (next_idx < num_iters) {
+            post_put_bw(qp, data_size, src_buf, src_buf_mkey, dst_buf, dst_buf_mkey, tidx,
+                        &tickets[slot]);
+            next_idx += stride;
+            ++tail_depth;
+        }
+    }
+
+#pragma unroll
+    for (uint32_t slot = 0; slot < window_depth; ++slot) {
+        if (slot < tail_depth)
+            poll_put_bw(qp, tickets[slot]);
+    }
+}
+
+template <uint32_t window_depth>
+static void launch_put_bw_window(cudaStream_t stream, struct doca_gpu_dev_verbs_qp *qp,
+                                 uint32_t num_iters, uint32_t cuda_blocks,
+                                 uint32_t cuda_threads, uint32_t data_size, uint8_t *src_buf,
+                                 uint32_t src_buf_mkey, uint8_t *dst_buf,
+                                 uint32_t dst_buf_mkey) {
+    put_bw_window<window_depth><<<cuda_blocks, cuda_threads, 0, stream>>>(
+        qp, num_iters, data_size, src_buf, src_buf_mkey, dst_buf, dst_buf_mkey);
+}
+
 extern "C" {
 
 doca_error_t gpunetio_verbs_put_bw(cudaStream_t stream, struct doca_gpu_dev_verbs_qp *qp,
                                    uint32_t num_iters, uint32_t cuda_blocks, uint32_t cuda_threads,
+                                   uint32_t window_depth,
                                    uint32_t data_size, uint8_t *src_buf, uint32_t src_buf_mkey,
                                    uint8_t *dst_buf, uint32_t dst_buf_mkey,
                                    enum doca_gpu_dev_verbs_exec_scope scope) {
@@ -125,12 +221,33 @@ doca_error_t gpunetio_verbs_put_bw(cudaStream_t stream, struct doca_gpu_dev_verb
         return DOCA_ERROR_BAD_STATE;
     }
 
-    if (scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD)
-        put_bw<DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD><<<cuda_blocks, cuda_threads, 0, stream>>>(
-            qp, num_iters, data_size, src_buf, src_buf_mkey, dst_buf, dst_buf_mkey);
-    else if (scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP)
+    if (scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD) {
+        switch (window_depth) {
+            case 1:
+                put_bw<DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD>
+                    <<<cuda_blocks, cuda_threads, 0, stream>>>(
+                        qp, num_iters, data_size, src_buf, src_buf_mkey, dst_buf, dst_buf_mkey);
+                break;
+            case 2:
+                launch_put_bw_window<2>(stream, qp, num_iters, cuda_blocks, cuda_threads, data_size,
+                                        src_buf, src_buf_mkey, dst_buf, dst_buf_mkey);
+                break;
+            case 4:
+                launch_put_bw_window<4>(stream, qp, num_iters, cuda_blocks, cuda_threads, data_size,
+                                        src_buf, src_buf_mkey, dst_buf, dst_buf_mkey);
+                break;
+            case 8:
+                launch_put_bw_window<8>(stream, qp, num_iters, cuda_blocks, cuda_threads, data_size,
+                                        src_buf, src_buf_mkey, dst_buf, dst_buf_mkey);
+                break;
+            default:
+                DOCA_LOG(LOG_ERR, "Unsupported PUT window depth %u", window_depth);
+                return DOCA_ERROR_INVALID_VALUE;
+        }
+    } else if (scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP) {
         put_bw<DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP><<<cuda_blocks, cuda_threads, 0, stream>>>(
             qp, num_iters, data_size, src_buf, src_buf_mkey, dst_buf, dst_buf_mkey);
+    }
 
     result = cudaGetLastError();
     if (cudaSuccess != result) {

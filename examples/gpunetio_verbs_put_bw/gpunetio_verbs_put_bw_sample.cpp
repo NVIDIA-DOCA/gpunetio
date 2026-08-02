@@ -298,6 +298,8 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
     pthread_t thread_id;
     struct cpu_proxy_args args;
     struct doca_gpu_dev_verbs_qp *qp_gpu;
+    uint32_t cuda_blocks;
+    uint32_t cuda_threads_per_block;
     int ret;
 
     resources.conn_socket = -1;
@@ -366,10 +368,18 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
         goto destroy_events;
     }
 
+    cuda_blocks = (resources.scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD &&
+                   resources.cuda_threads >= VERBS_CUDA_BLOCK &&
+                   resources.cuda_threads % VERBS_CUDA_BLOCK == 0)
+                      ? VERBS_CUDA_BLOCK
+                      : 1;
+    cuda_threads_per_block = resources.cuda_threads / cuda_blocks;
+
     DOCA_LOG(LOG_INFO,
-             "Launching gpunetio_verbs_put_bw kernel with %d CUDA Blocks, %d CUDA threads each, %d "
-             "total number of iterations, %d iterations per cuda thread, %d nic handler, %s scope",
-             VERBS_CUDA_BLOCK, resources.cuda_threads / VERBS_CUDA_BLOCK, resources.num_iters,
+             "Launching gpunetio_verbs_put_bw kernel with %d CUDA Blocks, %d CUDA threads each, "
+             "window depth %d, %d total number of iterations, %d iterations per cuda thread, %d "
+             "nic handler, %s scope",
+             cuda_blocks, cuda_threads_per_block, cfg->put_window_depth, resources.num_iters,
              resources.num_iters / resources.cuda_threads, resources.nic_handler,
              (resources.scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD) ? "THREAD" : "WARP");
 
@@ -399,8 +409,8 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
     for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
         /* Warmup per size*/
         status = gpunetio_verbs_put_bw(
-            cstream, qp_gpu, resources.num_iters, VERBS_CUDA_BLOCK,
-            resources.cuda_threads / VERBS_CUDA_BLOCK, message_size[idx], resources.data_buf[idx],
+            cstream, qp_gpu, resources.num_iters, cuda_blocks, cuda_threads_per_block,
+            cfg->put_window_depth, message_size[idx], resources.data_buf[idx],
             htobe32(resources.data_mr[idx]->lkey), (uint8_t *)(resources.remote_data_buf[idx]),
             htobe32(resources.remote_data_mkey[idx]), resources.scope);
         if (status != DOCA_SUCCESS) {
@@ -418,8 +428,8 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
         }
 
         status = gpunetio_verbs_put_bw(
-            cstream, qp_gpu, resources.num_iters, VERBS_CUDA_BLOCK,
-            resources.cuda_threads / VERBS_CUDA_BLOCK, message_size[idx], resources.data_buf[idx],
+            cstream, qp_gpu, resources.num_iters, cuda_blocks, cuda_threads_per_block,
+            cfg->put_window_depth, message_size[idx], resources.data_buf[idx],
             htobe32(resources.data_mr[idx]->lkey), (uint8_t *)(resources.remote_data_buf[idx]),
             htobe32(resources.remote_data_mkey[idx]), resources.scope);
         if (status != DOCA_SUCCESS) {
