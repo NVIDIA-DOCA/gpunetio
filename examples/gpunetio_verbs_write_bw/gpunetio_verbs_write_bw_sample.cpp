@@ -43,19 +43,20 @@ volatile bool server_force_quit = false;
 /*
  * Server validates data from client at the end of the test
  */
-static void server_validate_test(struct verbs_resources *resources) {
+static doca_error_t server_validate_test(struct verbs_resources *resources) {
     for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
         for (int pos = 0; pos < (int)resources->cuda_threads * message_size[idx]; pos++) {
             if (resources->data_buf[idx][pos] != (idx + 1)) {
                 DOCA_LOG(LOG_ERR, "Validation error: buffer %d pos %d has invalid data %d\n", idx,
                          pos, resources->data_buf[idx][pos]);
 
-                return;
+                return DOCA_ERROR_BAD_STATE;
             }
         }
     }
 
     DOCA_LOG(LOG_WARNING, "Validation successfull! Data received correctly from client");
+    return DOCA_SUCCESS;
 }
 
 /*
@@ -281,7 +282,9 @@ doca_error_t verbs_server(struct verbs_config *cfg) {
     // Wait for the client to complete the benchmark if single direction
     while (server_force_quit == false);
 
-    server_validate_test(&resources);
+
+    status = server_validate_test(&resources);
+    if (status != DOCA_SUCCESS) DOCA_LOG(LOG_ERR, "Server data validation failed");
 
 server_cleanup:
     tmp_status = destroy_local_memory_objects(&resources);
