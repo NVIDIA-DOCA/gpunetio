@@ -6,12 +6,12 @@
 
 - Updated all UMEM registrations to use `mlx5dv_devx_umem_reg_ex` and explicitly set `pgsz_bitmap` to the system page size, including for non-DMA-BUF memory.
 - Moved DOCA SDK logger in sdk_wrapper_init
-- Fixed DBR-less UAR address calculation
-- Removed unused files
 
 ### Fixed
 
 - Return `DOCA_ERROR_NOT_SUPPORTED` when DMA-BUF UMEM registration is requested with `DOCA_GPUNETIO_HAVE_MLX5DV_UMEM_DMABUF` disabled, and improved UMEM registration error logging.
+- DBR-less UAR address calculation
+- Removed unused files
 
 ## [4.0.0]
 
