@@ -89,6 +89,7 @@ struct verbs_config {
     std::string server_ip_addr;  /* DOCA device name */
     uint32_t num_iters;          /* total number orations per cuda kernel */
     uint32_t cuda_threads;       /* cuda threads per cuda block */
+    uint32_t put_window_depth;   /* outstanding PUTs per CUDA thread */
     enum doca_gpu_dev_verbs_nic_handler nic_handler;
     uint8_t exec_scope;
     enum doca_gpu_verbs_send_dbr_mode_ext
@@ -266,6 +267,7 @@ extern "C" {
  * @num_iters [in]: Total number of iterations
  * @cuda_blocks [in]: Number of CUDA blocks to launch the kernel
  * @cuda_threads [in]: Number of CUDA threads to launch the kernel
+ * @window_depth [in]: Maximum outstanding PUTs per CUDA thread
  * @data_size [in]: Data buffer size (number of bytes)
  * @src_buf [in]: Source GPU data buffer address
  * @src_buf_mkey [in]: Source GPU data buffer memory key
@@ -322,6 +324,7 @@ doca_error_t gpunetio_verbs_write_lat(
  */
 doca_error_t gpunetio_verbs_put_bw(cudaStream_t stream, struct doca_gpu_dev_verbs_qp *qp,
                                    uint32_t num_iters, uint32_t cuda_blocks, uint32_t cuda_threads,
+                                   uint32_t window_depth,
                                    uint32_t data_size, uint8_t *src_buf, uint32_t src_buf_mkey,
                                    uint8_t *dst_buf, uint32_t dst_buf_mkey,
                                    enum doca_gpu_dev_verbs_exec_scope scope);

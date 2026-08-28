@@ -40,6 +40,90 @@ int message_size[NUM_MSG_SIZE] = {1,    64,    128,   256,   512,    1024,   204
                                   8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576};
 volatile bool server_force_quit = false;
 
+#define PUT_BW_PROTOCOL_MAGIC 0x47505550U
+#define PUT_BW_PROTOCOL_VERSION 1U
+
+struct put_bw_peer_config {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t cuda_threads;
+    uint32_t num_qps;
+    uint32_t message_size;
+};
+
+static bool socket_send_all(int socket_fd, const void *buffer, size_t length) {
+    const uint8_t *cursor = (const uint8_t *)buffer;
+
+    while (length != 0) {
+        ssize_t sent = send(socket_fd, cursor, length, MSG_NOSIGNAL);
+        if (sent < 0 && errno == EINTR)
+            continue;
+        if (sent <= 0)
+            return false;
+        cursor += sent;
+        length -= (size_t)sent;
+    }
+
+    return true;
+}
+
+static bool socket_recv_all(int socket_fd, void *buffer, size_t length) {
+    uint8_t *cursor = (uint8_t *)buffer;
+
+    while (length != 0) {
+        ssize_t received = recv(socket_fd, cursor, length, 0);
+        if (received < 0 && errno == EINTR)
+            continue;
+        if (received <= 0)
+            return false;
+        cursor += received;
+        length -= (size_t)received;
+    }
+
+    return true;
+}
+
+static doca_error_t exchange_peer_config(struct verbs_resources *resources) {
+    const struct put_bw_peer_config local = {
+        .magic = htonl(PUT_BW_PROTOCOL_MAGIC),
+        .version = htonl(PUT_BW_PROTOCOL_VERSION),
+        .cuda_threads = htonl(resources->cuda_threads),
+        .num_qps = htonl(1),
+        .message_size = htonl(0),
+    };
+    struct put_bw_peer_config remote = {0};
+
+    if (!socket_send_all(resources->conn_socket, &local, sizeof(local)) ||
+        !socket_recv_all(resources->conn_socket, &remote, sizeof(remote))) {
+        DOCA_LOG(LOG_ERR, "Failed to exchange PUT benchmark configuration");
+        return DOCA_ERROR_CONNECTION_ABORTED;
+    }
+
+    remote.magic = ntohl(remote.magic);
+    remote.version = ntohl(remote.version);
+    remote.cuda_threads = ntohl(remote.cuda_threads);
+    remote.num_qps = ntohl(remote.num_qps);
+    remote.message_size = ntohl(remote.message_size);
+
+    if (remote.magic != PUT_BW_PROTOCOL_MAGIC || remote.version != PUT_BW_PROTOCOL_VERSION) {
+        DOCA_LOG(LOG_ERR, "Unsupported PUT benchmark peer protocol (magic 0x%x, version %u)",
+                 remote.magic, remote.version);
+        return DOCA_ERROR_NOT_SUPPORTED;
+    }
+
+    if (remote.cuda_threads != resources->cuda_threads || remote.num_qps != 1 ||
+        remote.message_size != 0) {
+        DOCA_LOG(LOG_ERR,
+                 "PUT peer configuration mismatch: threads local=%u remote=%u, QPs local=1 "
+                 "remote=%u, message size local=0 remote=%u",
+                 resources->cuda_threads, remote.cuda_threads, remote.num_qps,
+                 remote.message_size);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    return DOCA_SUCCESS;
+}
+
 /*
  * Server validates data from client at the end of the test
  */
@@ -156,17 +240,21 @@ exit_error:
 }
 
 static doca_error_t exchange_params_with_remote_peer(struct verbs_resources *resources) {
+    doca_error_t status = exchange_peer_config(resources);
+    if (status != DOCA_SUCCESS)
+        return status;
+
     if (resources->cfg->is_server) {
         // Server sends local info
         for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
             uint64_t local_addr = (uint64_t)resources->data_buf[idx];
-            if (send(resources->conn_socket, &local_addr, sizeof(uint64_t), 0) < 0) {
+            if (!socket_send_all(resources->conn_socket, &local_addr, sizeof(local_addr))) {
                 DOCA_LOG(LOG_ERR, "Failed to send local buffer address");
                 return DOCA_ERROR_CONNECTION_ABORTED;
             }
 
-            if (send(resources->conn_socket, &resources->data_mr[idx]->rkey, sizeof(uint32_t), 0) <
-                0) {
+            if (!socket_send_all(resources->conn_socket, &resources->data_mr[idx]->rkey,
+                                 sizeof(resources->data_mr[idx]->rkey))) {
                 DOCA_LOG(LOG_ERR, "Failed to send local MKEY");
                 return DOCA_ERROR_CONNECTION_ABORTED;
             }
@@ -174,47 +262,50 @@ static doca_error_t exchange_params_with_remote_peer(struct verbs_resources *res
     } else {
         // Client waits for server info
         for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
-            if (recv(resources->conn_socket, &resources->remote_data_buf[idx], sizeof(uint64_t),
-                     0) < 0) {
+            if (!socket_recv_all(resources->conn_socket, &resources->remote_data_buf[idx],
+                                 sizeof(resources->remote_data_buf[idx]))) {
                 DOCA_LOG(LOG_ERR, "Failed to receive remote buffer address ");
                 return DOCA_ERROR_CONNECTION_ABORTED;
             }
 
-            if (recv(resources->conn_socket, &resources->remote_data_mkey[idx], sizeof(uint32_t),
-                     0) < 0) {
+            if (!socket_recv_all(resources->conn_socket, &resources->remote_data_mkey[idx],
+                                 sizeof(resources->remote_data_mkey[idx]))) {
                 DOCA_LOG(LOG_ERR, "Failed to receive remote MKEY, err = %d", errno);
                 return DOCA_ERROR_CONNECTION_ABORTED;
             }
         }
     }
 
-    if (send(resources->conn_socket, &resources->local_qp_number, sizeof(uint32_t), 0) < 0) {
+    if (!socket_send_all(resources->conn_socket, &resources->local_qp_number,
+                         sizeof(resources->local_qp_number))) {
         DOCA_LOG(LOG_ERR, "Failed to send local QP number");
         return DOCA_ERROR_CONNECTION_ABORTED;
     }
 
-    if (recv(resources->conn_socket, &resources->remote_qp_number, sizeof(uint32_t), 0) < 0) {
+    if (!socket_recv_all(resources->conn_socket, &resources->remote_qp_number,
+                         sizeof(resources->remote_qp_number))) {
         DOCA_LOG(LOG_ERR, "Failed to receive remote QP number, err = %d", errno);
         return DOCA_ERROR_CONNECTION_ABORTED;
     }
 
-    if (send(resources->conn_socket, &resources->gid.raw, sizeof(resources->gid.raw), 0) < 0) {
+    if (!socket_send_all(resources->conn_socket, &resources->gid.raw,
+                         sizeof(resources->gid.raw))) {
         DOCA_LOG(LOG_ERR, "Failed to send local GID address");
         return DOCA_ERROR_CONNECTION_ABORTED;
     }
 
-    if (recv(resources->conn_socket, &resources->remote_gid.raw, sizeof(resources->gid.raw), 0) <
-        0) {
+    if (!socket_recv_all(resources->conn_socket, &resources->remote_gid.raw,
+                         sizeof(resources->remote_gid.raw))) {
         DOCA_LOG(LOG_ERR, "Failed to receive remote GID address, err = %d", errno);
         return DOCA_ERROR_CONNECTION_ABORTED;
     }
 
-    if (send(resources->conn_socket, &resources->lid, sizeof(uint32_t), 0) < 0) {
+    if (!socket_send_all(resources->conn_socket, &resources->lid, sizeof(resources->lid))) {
         DOCA_LOG(LOG_ERR, "Failed to send local GID address");
         return DOCA_ERROR_CONNECTION_ABORTED;
     }
 
-    if (recv(resources->conn_socket, &resources->dlid, sizeof(uint32_t), 0) < 0) {
+    if (!socket_recv_all(resources->conn_socket, &resources->dlid, sizeof(resources->dlid))) {
         DOCA_LOG(LOG_ERR, "Failed to receive remote GID address, err = %d", errno);
         return DOCA_ERROR_CONNECTION_ABORTED;
     }
@@ -300,6 +391,8 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
     pthread_t thread_id;
     struct cpu_proxy_args args;
     struct doca_gpu_dev_verbs_qp *qp_gpu;
+    uint32_t cuda_blocks;
+    uint32_t cuda_threads_per_block;
     int ret;
 
     resources.conn_socket = -1;
@@ -368,10 +461,18 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
         goto destroy_events;
     }
 
+    cuda_blocks = (resources.scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD &&
+                   resources.cuda_threads >= VERBS_CUDA_BLOCK &&
+                   resources.cuda_threads % VERBS_CUDA_BLOCK == 0)
+                      ? VERBS_CUDA_BLOCK
+                      : 1;
+    cuda_threads_per_block = resources.cuda_threads / cuda_blocks;
+
     DOCA_LOG(LOG_INFO,
-             "Launching gpunetio_verbs_put_bw kernel with %d CUDA Blocks, %d CUDA threads each, %d "
-             "total number of iterations, %d iterations per cuda thread, %d nic handler, %s scope",
-             VERBS_CUDA_BLOCK, resources.cuda_threads / VERBS_CUDA_BLOCK, resources.num_iters,
+             "Launching gpunetio_verbs_put_bw kernel with %d CUDA Blocks, %d CUDA threads each, "
+             "window depth %d, %d total number of iterations, %d iterations per cuda thread, %d "
+             "nic handler, %s scope",
+             cuda_blocks, cuda_threads_per_block, cfg->put_window_depth, resources.num_iters,
              resources.num_iters / resources.cuda_threads, resources.nic_handler,
              (resources.scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD) ? "THREAD" : "WARP");
 
@@ -401,8 +502,8 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
     for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
         /* Warmup per size*/
         status = gpunetio_verbs_put_bw(
-            cstream, qp_gpu, resources.num_iters, VERBS_CUDA_BLOCK,
-            resources.cuda_threads / VERBS_CUDA_BLOCK, message_size[idx], resources.data_buf[idx],
+            cstream, qp_gpu, resources.num_iters, cuda_blocks, cuda_threads_per_block,
+            cfg->put_window_depth, message_size[idx], resources.data_buf[idx],
             htobe32(resources.data_mr[idx]->lkey), (uint8_t *)(resources.remote_data_buf[idx]),
             htobe32(resources.remote_data_mkey[idx]), resources.scope);
         if (status != DOCA_SUCCESS) {
@@ -420,8 +521,8 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
         }
 
         status = gpunetio_verbs_put_bw(
-            cstream, qp_gpu, resources.num_iters, VERBS_CUDA_BLOCK,
-            resources.cuda_threads / VERBS_CUDA_BLOCK, message_size[idx], resources.data_buf[idx],
+            cstream, qp_gpu, resources.num_iters, cuda_blocks, cuda_threads_per_block,
+            cfg->put_window_depth, message_size[idx], resources.data_buf[idx],
             htobe32(resources.data_mr[idx]->lkey), (uint8_t *)(resources.remote_data_buf[idx]),
             htobe32(resources.remote_data_mkey[idx]), resources.scope);
         if (status != DOCA_SUCCESS) {
