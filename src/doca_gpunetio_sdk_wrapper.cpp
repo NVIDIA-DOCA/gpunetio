@@ -90,6 +90,11 @@ static void doca_gpunetio_sdk_wrapper_init(int *ret) {
     char libcommon_path[2048];
     char libverbs_path[2048];
     char libgpunetio_path[2048];
+#if DOCA_GPUNETIO_SDK_WRAPPER_ENABLE_DEBUG == 1
+    void *sdk_log;
+    doca_error_t doca_err = DOCA_SUCCESS;;
+#endif
+
 
     memset(libcommon_path, '\0', 2048);
     memset(libverbs_path, '\0', 2048);
@@ -151,7 +156,8 @@ static void doca_gpunetio_sdk_wrapper_init(int *ret) {
     p_doca_gpu_mem_alloc = (doca_gpu_mem_alloc_t)get_gpunetio_sdk_symbol("doca_gpu_mem_alloc");
     p_doca_gpu_mem_free = (doca_gpu_mem_free_t)get_gpunetio_sdk_symbol("doca_gpu_mem_free");
     p_doca_gpu_dmabuf_fd = (doca_gpu_dmabuf_fd_t)get_gpunetio_sdk_symbol("doca_gpu_dmabuf_fd");
-    p_doca_gpu_verbs_req_notify_cq = (doca_gpu_verbs_req_notify_cq_t)get_gpunetio_sdk_symbol("doca_gpu_verbs_req_notify_cq");
+    p_doca_gpu_verbs_req_notify_cq =
+        (doca_gpu_verbs_req_notify_cq_t)get_gpunetio_sdk_symbol("doca_gpu_verbs_req_notify_cq");
 
 #if DOCA_GPUNETIO_SDK_WRAPPER_ENABLE_DEBUG == 1
     p_doca_log_backend_create_with_file_sdk =
@@ -180,6 +186,15 @@ static void doca_gpunetio_sdk_wrapper_init(int *ret) {
     if (!p_doca_log_backend_create_with_file_sdk) {
         DOCA_LOG(LOG_ERR,
                  "Failed to get doca_log_backend_create_with_file_sdk DOCA Verbs Dev SDK symbol\n");
+        dlclose(verbs_handle);
+        verbs_handle = nullptr;
+        *ret = -1;
+        goto exit_error;
+    }
+
+    doca_err = p_doca_log_backend_create_with_file_sdk(stderr, &sdk_log);
+    if (doca_err != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
         dlclose(verbs_handle);
         verbs_handle = nullptr;
         *ret = -1;
@@ -222,10 +237,6 @@ doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_create(const char *gpu_bus_id, voi
     doca_error_t doca_err;
     const char *val = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
 
-#if DOCA_GPUNETIO_SDK_WRAPPER_ENABLE_DEBUG == 1
-    void *sdk_log;
-#endif
-
     if (get_sdk_wrapper_env_var() > 0) {
         if (init_gpunetio_sdk_wrapper() != 0) {
             DOCA_LOG(LOG_WARNING,
@@ -234,14 +245,6 @@ doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_create(const char *gpu_bus_id, voi
                      val);
             return DOCA_SDK_WRAPPER_NOT_FOUND;
         }
-
-#if DOCA_GPUNETIO_SDK_WRAPPER_ENABLE_DEBUG == 1
-        doca_err = p_doca_log_backend_create_with_file_sdk(stderr, &sdk_log);
-        if (doca_err != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
-            return DOCA_SDK_WRAPPER_API_ERROR;
-        }
-#endif
 
         doca_err = p_doca_gpu_create(gpu_bus_id, gpu_dev);
         if (doca_err == DOCA_SUCCESS) {
@@ -336,8 +339,7 @@ doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_verbs_req_notify_cq(void *gpu_dev,
         if (init_gpunetio_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
 
         if (p_doca_gpu_verbs_req_notify_cq == nullptr) {
-            DOCA_LOG(LOG_ERR,
-                     "DOCA SDK symbol doca_gpu_verbs_req_notify_cq not found at %s",
+            DOCA_LOG(LOG_ERR, "DOCA SDK symbol doca_gpu_verbs_req_notify_cq not found at %s",
                      __func__);
             return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
         }
