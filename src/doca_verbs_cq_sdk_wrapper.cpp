@@ -308,6 +308,10 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_cq_attr_create(void **verbs_cq_a
     doca_error_t doca_err = DOCA_SUCCESS;
     const char *val = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
 
+#if DOCA_VERBS_CQ_SDK_WRAPPER_ENABLE_DEBUG == 1
+    void *sdk_log;
+#endif
+
     if (get_sdk_wrapper_env_var() > 0) {
         if (init_verbs_sdk_wrapper() != 0) {
             DOCA_LOG(LOG_WARNING,
@@ -316,6 +320,14 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_cq_attr_create(void **verbs_cq_a
                      val);
             return DOCA_SDK_WRAPPER_NOT_FOUND;
         }
+
+#if DOCA_VERBS_CQ_SDK_WRAPPER_ENABLE_DEBUG == 1
+        doca_err = p_doca_log_backend_create_with_file_sdk(stderr, &sdk_log);
+        if (doca_err != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
+            return DOCA_SDK_WRAPPER_API_ERROR;
+        }
+#endif
 
         doca_err = p_doca_verbs_cq_attr_create(verbs_cq_attr);
         if (doca_err == DOCA_SUCCESS) {

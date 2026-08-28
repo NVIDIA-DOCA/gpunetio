@@ -237,6 +237,10 @@ doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_create(const char *gpu_bus_id, voi
     doca_error_t doca_err;
     const char *val = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
 
+#if DOCA_GPUNETIO_SDK_WRAPPER_ENABLE_DEBUG == 1
+    void *sdk_log;
+#endif
+
     if (get_sdk_wrapper_env_var() > 0) {
         if (init_gpunetio_sdk_wrapper() != 0) {
             DOCA_LOG(LOG_WARNING,
@@ -245,6 +249,14 @@ doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_create(const char *gpu_bus_id, voi
                      val);
             return DOCA_SDK_WRAPPER_NOT_FOUND;
         }
+
+#if DOCA_GPUNETIO_SDK_WRAPPER_ENABLE_DEBUG == 1
+        doca_err = p_doca_log_backend_create_with_file_sdk(stderr, &sdk_log);
+        if (doca_err != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
+            return DOCA_SDK_WRAPPER_API_ERROR;
+        }
+#endif
 
         doca_err = p_doca_gpu_create(gpu_bus_id, gpu_dev);
         if (doca_err == DOCA_SUCCESS) {
