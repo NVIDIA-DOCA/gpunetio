@@ -41,15 +41,17 @@ __global__ void write_bw(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, u
     uint64_t wqe_idx = 0;
     struct doca_gpu_dev_verbs_wqe *wqe_ptr;
 
-    wqe_idx = (doca_gpu_dev_verbs_atomic_read<uint64_t, DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(&qp->sq_wqe_pi) + threadIdx.x);
+    wqe_idx =
+        (doca_gpu_dev_verbs_atomic_read<uint64_t, DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(
+             &qp->sq_wqe_pi) +
+         threadIdx.x);
 
     for (uint32_t idx = threadIdx.x; idx < num_iters; idx += blockDim.x) {
         wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
 
 #if ENABLE_CQE_ERROR_FOR_COMP_CHANNEL == 1
         /* To test CQ comp channel feature, cause a CQE error on purpose for message size 64B. */
-        if (wqe_idx == (num_iters * 4) - 1)
-            dst_buf_mkey = 0;
+        if (wqe_idx == (num_iters * 4) - 1) dst_buf_mkey = 0;
 #endif
 
         doca_gpu_dev_verbs_wqe_prepare_write(
@@ -71,8 +73,7 @@ __global__ void write_bw(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, u
     // Assumption: QP is long enough to hold all the WQEs posted in the loop.
     // Application needs to poll only the last CQE corresponding to the last posted WQE.
     if (threadIdx.x == (blockDim.x - 1)) {
-        if (doca_gpu_dev_verbs_poll_cq_at(qp,
-                                          (wqe_idx - blockDim.x)) != 0) {
+        if (doca_gpu_dev_verbs_poll_cq_at(qp, (wqe_idx - blockDim.x)) != 0) {
 #if ENABLE_DEBUG == 1
             printf("Error CQE!\n");
 #endif

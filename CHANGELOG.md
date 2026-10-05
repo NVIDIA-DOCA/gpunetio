@@ -1,5 +1,43 @@
 # Changelog
 
+## [5.0.0]
+
+### Added
+
+- Added GPU/NIC capability discovery APIs for GPU-memory UMEM, host-memory UMEM, and GPU SM doorbell support: `doca_gpu_nic_cap_is_gpu_mem_umem_supported`, `doca_gpu_nic_cap_is_host_mem_umem_supported`, and `doca_gpu_nic_cap_is_nic_handler_gpu_sm_db_supported`, with open-source and DOCA SDK implementations.
+- Added `DOCA_GPUNETIO_VERBS_QP_INIT_ATTR_FLAGS_PREFER_UAR_SHARING` to prefer shared noncached UARs when creating high-level QPs and QP groups.
+- Added open-source QP data-placement ordering semantic support for `IBTA`, `OOO_RW`, and `OOO_ALL`, with device capability validation.
+- Added `doca_verbs_query_global_traffic_class` to query a port's global RoCE traffic class from sysfs using a `doca_dev` in open-source or DOCA SDK mode.
+- Added receive-queue foundations for RDMA Write with Immediate, including the high-level `rq_nwqe` attribute, host receive CQs, receive doorbell initialization, and receive-state reset. Receive queues are supported for individual high-level QPs; QP groups and batched QP creation do not yet support them.
+- Added rank-local signal-map lifecycle APIs in `doca_gpunetio_signal.h` to create, register, unregister, reset, and destroy mappings from signal IDs to application-owned 8-byte GPU slots using GDRCopy, plus configurable immediate-data packing macros.
+- Added the `MLX5_CMD_OP_QUERY_Q_COUNTER` opcode and the `mlx5_ifc_alloc_q_counter_in_bits`, `mlx5_ifc_query_q_counter_in_bits`, and `mlx5_ifc_query_q_counter_out_bits` layouts to `host/mlx5_ifc.h`, for allocating and querying Q counter sets through DevX with `DEVX_SET`/`DEVX_GET`.
+
+### Changed
+
+- Renamed the LAG TX port affinity capability getters to `doca_verbs_device_attr_get_is_lag_tx_port_affinity_supported`, `doca_verbs_device_attr_get_is_init2_lag_tx_port_affinity_supported`, and `doca_verbs_device_attr_get_is_rts2rts_lag_tx_port_affinity_supported` to match the DOCA SDK APIs, and added SDK wrappers for the capability queries and QP attribute setter.
+- Extended `doca_gpu_verbs_export_qp` with receive-CQ and CPU-accessible doorbell-record parameters (`cq_rq` and `dbr_cpu_ptr`). Pass `NULL` for both when the QP has no receive queue.
+- Bumped the library version and minimum compatible host-code version to 5.0.0 for the host API changes.
+- Updated dynamic loading to try versioned DOCA SDK, GDRCopy, and mlx5 library names before falling back to unversioned names.
+- Enabled cached `__ldg` loads by default for nvcc 13.4 or newer and non-nvcc compilers, while retaining the `DOCA_GPUNETIO_VERBS_USE_LDG` override.
+
+### Fixed
+
+- Fixed high-level UMEM cleanup to track system allocations explicitly and use the correct deallocator for host CQ memory.
+- Fixed host receive-CQ UMEM registration to allow NIC writes.
+- Fixed UAR creation error propagation when allocation attempts fail.
+- Fixed put/write bandwidth examples to propagate server data-validation failures.
+
+## [4.1.0]
+
+### Added
+
+- Added LAG TX port affinity support for open-source DOCA Verbs QPs, including `DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY`, `doca_verbs_qp_attr_set_lag_tx_port_affinity`, and device capability query APIs. The QP attribute is not supported in DOCA SDK mode.
+- Added `doca_gpu_dev_verbs_signal_warp` implementation
+
+### Fixed
+
+- Fixed missing endianness conversion for compare data and compare masks in 32-bit and 64-bit extended atomic compare-and-swap WQEs.
+
 ## [4.0.1]
 
 ### Changed

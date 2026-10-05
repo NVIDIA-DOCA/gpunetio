@@ -282,7 +282,6 @@ doca_error_t verbs_server(struct verbs_config *cfg) {
     // Wait for the client to complete the benchmark if single direction
     while (server_force_quit == false);
 
-
     status = server_validate_test(&resources);
     if (status != DOCA_SUCCESS) DOCA_LOG(LOG_ERR, "Server data validation failed");
 

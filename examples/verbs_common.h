@@ -135,7 +135,7 @@ struct verbs_resources {
     enum doca_gpu_verbs_send_dbr_mode_ext
         send_dbr_mode_ext; /* Enable send dbr mode ext to avoid DBREC update on sending */
 
-    bool enable_umem_cpu; /* Enable creation of QP/CQ UMEM on CPU pinned memory */
+    bool enable_umem_cpu;     /* Enable creation of QP/CQ UMEM on CPU pinned memory */
     bool enable_comp_channel; /* Enable creation of CQ comp channel for error checking */
     doca_verbs_comp_channel_t *comp_channel;
 };

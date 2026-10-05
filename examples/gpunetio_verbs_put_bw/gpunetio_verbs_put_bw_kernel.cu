@@ -86,8 +86,7 @@ __global__ void put_bw(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, uin
         if (scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP) {
             if (lane_idx == 0) {
                 if (doca_gpu_dev_verbs_poll_cq_at<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(
-                        qp,
-                        out_ticket + DOCA_GPUNETIO_VERBS_WARP_SIZE - 1) != 0) {
+                        qp, out_ticket + DOCA_GPUNETIO_VERBS_WARP_SIZE - 1) != 0) {
 #if ENABLE_DEBUG == 1
                     printf("Error CQE!\n");
 #endif
