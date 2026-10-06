@@ -44,10 +44,11 @@ int main(int argc, char **argv) {
     verbs_cfg.gid_index = DEFAULT_GID_INDEX;
     verbs_cfg.num_iters = NUM_ITERS;
     verbs_cfg.cuda_threads = CUDA_THREADS_BW;
+    verbs_cfg.put_window_depth = 1;
     verbs_cfg.nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO;
     verbs_cfg.exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD;
 
-    while ((option = getopt(argc, argv, "c:d:e:g:i:l:p:")) != -1) {
+    while ((option = getopt(argc, argv, "c:d:e:g:i:l:p:t:w:")) != -1) {
         switch (option) {
             case 'c': {
                 verbs_cfg.server_ip_addr = optarg;
@@ -74,11 +75,6 @@ int main(int argc, char **argv) {
             }
             case 'i': {
                 verbs_cfg.num_iters = std::atoi(optarg);
-                if ((verbs_cfg.num_iters % verbs_cfg.cuda_threads) != 0) {
-                    DOCA_LOG(LOG_ERR, "Iterations must be a multiple of CUDA threads number (%d)",
-                             verbs_cfg.cuda_threads);
-                    return 1;
-                }
                 break;
             }
             case 'l': {
@@ -93,6 +89,14 @@ int main(int argc, char **argv) {
                 }
                 break;
             }
+            case 't': {
+                verbs_cfg.cuda_threads = std::atoi(optarg);
+                break;
+            }
+            case 'w': {
+                verbs_cfg.put_window_depth = std::atoi(optarg);
+                break;
+            }
             default:
                 std::cerr << "Usage: " << argv[0] << "\n"
                           << " -c <server_ip> (Client only)\n"
@@ -103,9 +107,50 @@ int main(int argc, char **argv) {
                           << " -l <GID Index (default: 0)>\n"
                           << " -p <NIC handler. 0: AUTO 1: CPU PROXY 2: GPU SM_DB 6: GPU BF "
                              "(default: 0)>\n"
+                          << " -t <total CUDA threads (default: 512)>\n"
+                          << " -w <outstanding PUTs per thread: 1, 2, 4, or 8 (default: 1)>\n"
                           << std::endl;
                 return 1;
         }
+    }
+
+    if (verbs_cfg.cuda_threads == 0 || verbs_cfg.num_iters == 0 ||
+        verbs_cfg.num_iters % verbs_cfg.cuda_threads != 0) {
+        DOCA_LOG(LOG_ERR,
+                 "Iterations and CUDA thread count must be non-zero, and iterations must be a "
+                 "multiple of the thread count (%d)",
+                 verbs_cfg.cuda_threads);
+        return 1;
+    }
+    if (verbs_cfg.put_window_depth != 1 && verbs_cfg.put_window_depth != 2 &&
+        verbs_cfg.put_window_depth != 4 && verbs_cfg.put_window_depth != 8) {
+        DOCA_LOG(LOG_ERR, "PUT window must be one of: 1, 2, 4, 8");
+        return 1;
+    }
+    if ((uint64_t)verbs_cfg.cuda_threads * verbs_cfg.put_window_depth >
+        VERBS_TEST_QUEUE_SIZE) {
+        DOCA_LOG(LOG_ERR, "CUDA threads x PUT window must not exceed SQ size (%d)",
+                 VERBS_TEST_QUEUE_SIZE);
+        return 1;
+    }
+    if (verbs_cfg.exec_scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP &&
+        verbs_cfg.put_window_depth != 1) {
+        DOCA_LOG(LOG_ERR, "PUT windows greater than one currently require THREAD scope");
+        return 1;
+    }
+    if (verbs_cfg.exec_scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP &&
+        (verbs_cfg.cuda_threads % DOCA_GPUNETIO_VERBS_WARP_SIZE != 0 ||
+         verbs_cfg.cuda_threads > 1024)) {
+        DOCA_LOG(LOG_ERR, "WARP scope requires a multiple of 32 threads in one block");
+        return 1;
+    }
+    if (verbs_cfg.exec_scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD &&
+        (verbs_cfg.cuda_threads > 2048 ||
+         (verbs_cfg.cuda_threads > 1024 && verbs_cfg.cuda_threads % 2 != 0))) {
+        DOCA_LOG(LOG_ERR,
+                 "THREAD scope supports one block up to 1024 threads or two equal blocks up to "
+                 "2048 total threads");
+        return 1;
     }
 
     if (verbs_cfg.is_server) {
