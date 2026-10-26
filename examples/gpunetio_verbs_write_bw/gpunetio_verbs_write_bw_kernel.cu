@@ -35,6 +35,7 @@
 #define ENABLE_DEBUG 0
 #define ENABLE_CQE_ERROR_FOR_COMP_CHANNEL 0
 
+template <enum doca_gpu_dev_verbs_nic_handler nic_handler>
 __global__ void write_bw(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, uint32_t size,
                          uint8_t *src_buf, uint32_t src_buf_mkey, uint8_t *dst_buf,
                          uint32_t dst_buf_mkey) {
@@ -50,7 +51,10 @@ __global__ void write_bw(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, u
         wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
 
 #if ENABLE_CQE_ERROR_FOR_COMP_CHANNEL == 1
-        /* To test CQ comp channel feature, cause a CQE error on purpose for message size 64B. */
+        /*
+         * To test event-based CQ comp channel feature,
+         * cause a CQE error on purpose for last WQE message size 64B.
+         */
         if (wqe_idx == (num_iters * 4) - 1) dst_buf_mkey = 0;
 #endif
 
@@ -59,9 +63,14 @@ __global__ void write_bw(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, u
             0, (uint64_t)(dst_buf + (size * threadIdx.x)), dst_buf_mkey,
             (uint64_t)(src_buf + (size * threadIdx.x)), src_buf_mkey, size);
 
+        /* Free flow: the CPU thread rings the doorbell once it finds the WQEs marked ready */
+        if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW)
+            doca_gpu_dev_verbs_mark_wqes_ready_free_flow(qp, wqe_idx, wqe_idx);
+
         __syncthreads();
 
-        if (threadIdx.x == (blockDim.x - 1))
+        if (nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW &&
+            threadIdx.x == (blockDim.x - 1))
             doca_gpu_dev_verbs_submit<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE>(
                 qp, (wqe_idx + 1), DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_CPU_PROXY_UPDATE_PI);
 
@@ -73,9 +82,15 @@ __global__ void write_bw(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, u
     // Assumption: QP is long enough to hold all the WQEs posted in the loop.
     // Application needs to poll only the last CQE corresponding to the last posted WQE.
     if (threadIdx.x == (blockDim.x - 1)) {
+        /* Free flow doesn't move the producer index the next launch starts from: move it here */
+        if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW)
+            doca_gpu_dev_verbs_atomic_max<uint64_t,
+                                          DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE>(
+                &qp->sq_wqe_pi, wqe_idx - blockDim.x + 1);
+
         if (doca_gpu_dev_verbs_poll_cq_at(qp, (wqe_idx - blockDim.x)) != 0) {
 #if ENABLE_DEBUG == 1
-            printf("Error CQE!\n");
+            printf("Error CQE at wqe %ld\n", wqe_idx - blockDim.x);
 #endif
         }
     }
@@ -87,29 +102,36 @@ extern "C" {
 doca_error_t gpunetio_verbs_write_bw(cudaStream_t stream, struct doca_gpu_dev_verbs_qp *qp,
                                      uint32_t cuda_threads_iters, uint32_t cuda_blocks,
                                      uint32_t cuda_threads, uint32_t size, uint8_t *src_buf,
-                                     uint32_t src_buf_mkey, uint8_t *dst_buf,
-                                     uint32_t dst_buf_mkey) {
+                                     uint32_t src_buf_mkey, uint8_t *dst_buf, uint32_t dst_buf_mkey,
+                                     enum doca_gpu_dev_verbs_nic_handler nic_handler) {
     cudaError_t result = cudaSuccess;
 
     /* Check no previous CUDA errors */
     result = cudaGetLastError();
     if (cudaSuccess != result) {
-        DOCA_LOG(LOG_ERR, "[%s:%d] cuda failed with %s\n", __FILE__, __LINE__,
+        DOCA_LOG(LOG_ERR, "[%s:%d] cuda failed with %s", __FILE__, __LINE__,
                  cudaGetErrorString(result));
         return DOCA_ERROR_BAD_STATE;
     }
 
-    if (cuda_blocks > 1) {
-        DOCA_LOG(LOG_ERR, "The kernel supports only 1 CUDA Block\n");
+    if (cuda_blocks != 1) {
+        DOCA_LOG(LOG_ERR, "The kernel supports only 1 CUDA Block, requested cuda_blocks=%u",
+                 cuda_blocks);
         return DOCA_ERROR_BAD_STATE;
     }
 
-    write_bw<<<cuda_blocks, cuda_threads, 0, stream>>>(qp, cuda_threads_iters, size, src_buf,
+    /* The other NIC handlers are dispatched at run time by doca_gpu_dev_verbs_submit() */
+    if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW)
+        write_bw<DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW>
+            <<<cuda_blocks, cuda_threads, 0, stream>>>(qp, cuda_threads_iters, size, src_buf,
                                                        src_buf_mkey, dst_buf, dst_buf_mkey);
+    else
+        write_bw<DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO><<<cuda_blocks, cuda_threads, 0, stream>>>(
+            qp, cuda_threads_iters, size, src_buf, src_buf_mkey, dst_buf, dst_buf_mkey);
 
     result = cudaGetLastError();
     if (cudaSuccess != result) {
-        DOCA_LOG(LOG_ERR, "[%s:%d] cuda failed with %s\n", __FILE__, __LINE__,
+        DOCA_LOG(LOG_ERR, "[%s:%d] cuda failed with %s", __FILE__, __LINE__,
                  cudaGetErrorString(result));
         return DOCA_ERROR_BAD_STATE;
     }

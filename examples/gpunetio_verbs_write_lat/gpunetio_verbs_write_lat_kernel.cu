@@ -45,12 +45,16 @@
 /*
  * Ping-pong write latency test.
  * The code assumes the CUDA kernel is launched with only 1 CUDA thread.
+ *
+ * Each message carries an 8-bit sequence number in its last byte. Sequence numbers continue from
+ * start_iters across launches on the same buffers: restarting from 1 would match the last value of
+ * the previous launch whenever num_iters % 256 == 1, letting a side run ahead of its peer.
  */
 template <bool is_client, enum doca_gpu_dev_verbs_nic_handler nic_handler>
-__global__ void write_lat(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, uint32_t size,
-                          uint8_t *local_poll_buf, uint32_t local_poll_mkey,
-                          uint8_t *local_post_buf, uint32_t local_post_mkey, uint8_t *dst_buf,
-                          uint32_t dst_buf_mkey) {
+__global__ void write_lat(struct doca_gpu_dev_verbs_qp *qp, uint32_t start_iters,
+                          uint32_t num_iters, uint32_t size, uint8_t *local_poll_buf,
+                          uint32_t local_poll_mkey, uint8_t *local_post_buf,
+                          uint32_t local_post_mkey, uint8_t *dst_buf, uint32_t dst_buf_mkey) {
     uint64_t wqe_idx = 0;
     struct doca_gpu_dev_verbs_wqe *wqe_ptr;
     uint64_t scnt = 0;
@@ -60,7 +64,9 @@ __global__ void write_lat(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, 
     uint64_t src = (uint64_t)(local_post_buf + (size * threadIdx.x));
 
 #ifdef DOCA_GPUNETIO_VERBS_HAS_TMA_COPY
-    __shared__ struct doca_gpu_dev_verbs_wqe wqe_ptr_sh[CUDA_THREADS_LAT];
+    /* Source of the cp.async.bulk BlueFlame copy, which requires 16B alignment (the WQE type only
+     * has 8B) */
+    __shared__ __align__(16) struct doca_gpu_dev_verbs_wqe wqe_ptr_sh[CUDA_THREADS_LAT];
 #endif
 
     wqe_idx = doca_gpu_dev_verbs_atomic_read<uint64_t,
@@ -74,14 +80,14 @@ __global__ void write_lat(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, 
              * To ensure correctness, client and servers polls on the latest byte of the expected
              * message. This should reflect an increased latency for bigger message size.
              */
-            while (DOCA_GPUNETIO_VOLATILE(local_poll_buf[idx]) != (uint8_t)rcnt);
+            while (DOCA_GPUNETIO_VOLATILE(local_poll_buf[idx]) != (uint8_t)(start_iters + rcnt));
         }
 
         doca_gpu_dev_verbs_fence_acquire<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_SYS>();
 
         if (scnt < num_iters) {
             ++scnt;
-            DOCA_GPUNETIO_VOLATILE(local_post_buf[idx]) = (uint8_t)scnt;
+            DOCA_GPUNETIO_VOLATILE(local_post_buf[idx]) = (uint8_t)(start_iters + scnt);
 
 #ifdef DOCA_GPUNETIO_VERBS_HAS_TMA_COPY
             if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF) {
@@ -120,6 +126,9 @@ __global__ void write_lat(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, 
                                              DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU>(qp, wqe_idx + 1,
                                                                                  wqe_ptr);
 #endif
+            } else if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW) {
+                /* Free flow: the CPU thread rings the doorbell once it sees the WQE ready */
+                doca_gpu_dev_verbs_mark_wqes_ready_free_flow(qp, wqe_idx, wqe_idx);
             } else {
                 doca_gpu_dev_verbs_submit<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE,
                                           DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU, nic_handler>(
@@ -132,6 +141,12 @@ __global__ void write_lat(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, 
         }
     }
 
+    /* Free flow doesn't move the producer index the next launch starts from: move it here */
+    if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW)
+        doca_gpu_dev_verbs_atomic_max<uint64_t,
+                                      DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE>(
+            &qp->sq_wqe_pi, wqe_idx);
+
     if (doca_gpu_dev_verbs_poll_cq_collapsed_at(qp, wqe_idx - 1) != 0) {
 #if ENABLE_DEBUG == 1
         printf("Error CQE!\n");
@@ -142,87 +157,99 @@ __global__ void write_lat(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, 
 extern "C" {
 
 doca_error_t gpunetio_verbs_write_lat(
-    cudaStream_t stream, struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, uint32_t cuda_blocks,
-    uint32_t cuda_threads, uint32_t size, uint8_t *local_poll_buf, uint32_t local_poll_mkey,
-    uint8_t *local_post_buf, uint32_t local_post_mkey, uint8_t *dst_buf, uint32_t dst_buf_mkey,
-    enum doca_gpu_dev_verbs_nic_handler nic_handler, bool is_client) {
+    cudaStream_t stream, struct doca_gpu_dev_verbs_qp *qp, uint32_t start_iters, uint32_t num_iters,
+    uint32_t cuda_blocks, uint32_t cuda_threads, uint32_t size, uint8_t *local_poll_buf,
+    uint32_t local_poll_mkey, uint8_t *local_post_buf, uint32_t local_post_mkey, uint8_t *dst_buf,
+    uint32_t dst_buf_mkey, enum doca_gpu_dev_verbs_nic_handler nic_handler, bool is_client) {
     cudaError_t result = cudaSuccess;
 
     /* Check no previous CUDA errors */
     result = cudaGetLastError();
     if (cudaSuccess != result) {
-        DOCA_LOG(LOG_ERR, "[%s:%d] cuda failed with %s \n", __FILE__, __LINE__,
+        DOCA_LOG(LOG_ERR, "[%s:%d] cuda failed with %s", __FILE__, __LINE__,
                  cudaGetErrorString(result));
         return DOCA_ERROR_BAD_STATE;
     }
 
-    if (cuda_blocks > 1) {
-        DOCA_LOG(LOG_ERR, "The kernel supports only 1 CUDA Block\n");
+    if (cuda_blocks != 1) {
+        DOCA_LOG(LOG_ERR, "The kernel supports only 1 CUDA Block, requested cuda_blocks=%u",
+                 cuda_blocks);
         return DOCA_ERROR_BAD_STATE;
     }
 
-    if (cuda_threads > 1) {
-        DOCA_LOG(LOG_ERR, "The kernel supports only 1 CUDA Thread\n");
+    if (cuda_threads != 1) {
+        DOCA_LOG(LOG_ERR, "The kernel supports only 1 CUDA Thread, requested cuda_threads=%u",
+                 cuda_threads);
         return DOCA_ERROR_BAD_STATE;
     }
 
     if (is_client) {
         if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF)
             write_lat<true, DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF>
-                <<<cuda_blocks, cuda_threads, 0, stream>>>(qp, num_iters, size, local_poll_buf,
-                                                           local_poll_mkey, local_post_buf,
-                                                           local_post_mkey, dst_buf, dst_buf_mkey);
+                <<<cuda_blocks, cuda_threads, 0, stream>>>(
+                    qp, start_iters, num_iters, size, local_poll_buf, local_poll_mkey,
+                    local_post_buf, local_post_mkey, dst_buf, dst_buf_mkey);
         else if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB)
             write_lat<true, DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB>
-                <<<cuda_blocks, cuda_threads, 0, stream>>>(qp, num_iters, size, local_poll_buf,
-                                                           local_poll_mkey, local_post_buf,
-                                                           local_post_mkey, dst_buf, dst_buf_mkey);
+                <<<cuda_blocks, cuda_threads, 0, stream>>>(
+                    qp, start_iters, num_iters, size, local_poll_buf, local_poll_mkey,
+                    local_post_buf, local_post_mkey, dst_buf, dst_buf_mkey);
         else if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_NO_DBR)
             write_lat<true, DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_NO_DBR>
-                <<<cuda_blocks, cuda_threads, 0, stream>>>(qp, num_iters, size, local_poll_buf,
-                                                           local_poll_mkey, local_post_buf,
-                                                           local_post_mkey, dst_buf, dst_buf_mkey);
+                <<<cuda_blocks, cuda_threads, 0, stream>>>(
+                    qp, start_iters, num_iters, size, local_poll_buf, local_poll_mkey,
+                    local_post_buf, local_post_mkey, dst_buf, dst_buf_mkey);
         else if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY)
             write_lat<true, DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY>
-                <<<cuda_blocks, cuda_threads, 0, stream>>>(qp, num_iters, size, local_poll_buf,
-                                                           local_poll_mkey, local_post_buf,
-                                                           local_post_mkey, dst_buf, dst_buf_mkey);
+                <<<cuda_blocks, cuda_threads, 0, stream>>>(
+                    qp, start_iters, num_iters, size, local_poll_buf, local_poll_mkey,
+                    local_post_buf, local_post_mkey, dst_buf, dst_buf_mkey);
+        else if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW)
+            write_lat<true, DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW>
+                <<<cuda_blocks, cuda_threads, 0, stream>>>(
+                    qp, start_iters, num_iters, size, local_poll_buf, local_poll_mkey,
+                    local_post_buf, local_post_mkey, dst_buf, dst_buf_mkey);
         else
             write_lat<true, DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
-                <<<cuda_blocks, cuda_threads, 0, stream>>>(qp, num_iters, size, local_poll_buf,
-                                                           local_poll_mkey, local_post_buf,
-                                                           local_post_mkey, dst_buf, dst_buf_mkey);
+                <<<cuda_blocks, cuda_threads, 0, stream>>>(
+                    qp, start_iters, num_iters, size, local_poll_buf, local_poll_mkey,
+                    local_post_buf, local_post_mkey, dst_buf, dst_buf_mkey);
     } else {
         if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF)
             write_lat<false, DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF>
-                <<<cuda_blocks, cuda_threads, 0, stream>>>(qp, num_iters, size, local_poll_buf,
-                                                           local_poll_mkey, local_post_buf,
-                                                           local_post_mkey, dst_buf, dst_buf_mkey);
+                <<<cuda_blocks, cuda_threads, 0, stream>>>(
+                    qp, start_iters, num_iters, size, local_poll_buf, local_poll_mkey,
+                    local_post_buf, local_post_mkey, dst_buf, dst_buf_mkey);
         else if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB)
             write_lat<false, DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB>
-                <<<cuda_blocks, cuda_threads, 0, stream>>>(qp, num_iters, size, local_poll_buf,
-                                                           local_poll_mkey, local_post_buf,
-                                                           local_post_mkey, dst_buf, dst_buf_mkey);
+                <<<cuda_blocks, cuda_threads, 0, stream>>>(
+                    qp, start_iters, num_iters, size, local_poll_buf, local_poll_mkey,
+                    local_post_buf, local_post_mkey, dst_buf, dst_buf_mkey);
         else if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_NO_DBR)
             write_lat<false, DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_NO_DBR>
-                <<<cuda_blocks, cuda_threads, 0, stream>>>(qp, num_iters, size, local_poll_buf,
-                                                           local_poll_mkey, local_post_buf,
-                                                           local_post_mkey, dst_buf, dst_buf_mkey);
+                <<<cuda_blocks, cuda_threads, 0, stream>>>(
+                    qp, start_iters, num_iters, size, local_poll_buf, local_poll_mkey,
+                    local_post_buf, local_post_mkey, dst_buf, dst_buf_mkey);
         else if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY)
             write_lat<false, DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY>
-                <<<cuda_blocks, cuda_threads, 0, stream>>>(qp, num_iters, size, local_poll_buf,
-                                                           local_poll_mkey, local_post_buf,
-                                                           local_post_mkey, dst_buf, dst_buf_mkey);
+                <<<cuda_blocks, cuda_threads, 0, stream>>>(
+                    qp, start_iters, num_iters, size, local_poll_buf, local_poll_mkey,
+                    local_post_buf, local_post_mkey, dst_buf, dst_buf_mkey);
+        else if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW)
+            write_lat<false, DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW>
+                <<<cuda_blocks, cuda_threads, 0, stream>>>(
+                    qp, start_iters, num_iters, size, local_poll_buf, local_poll_mkey,
+                    local_post_buf, local_post_mkey, dst_buf, dst_buf_mkey);
         else
             write_lat<false, DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
-                <<<cuda_blocks, cuda_threads, 0, stream>>>(qp, num_iters, size, local_poll_buf,
-                                                           local_poll_mkey, local_post_buf,
-                                                           local_post_mkey, dst_buf, dst_buf_mkey);
+                <<<cuda_blocks, cuda_threads, 0, stream>>>(
+                    qp, start_iters, num_iters, size, local_poll_buf, local_poll_mkey,
+                    local_post_buf, local_post_mkey, dst_buf, dst_buf_mkey);
     }
 
     result = cudaGetLastError();
     if (cudaSuccess != result) {
-        DOCA_LOG(LOG_ERR, "[%s:%d] cuda failed with %s \n", __FILE__, __LINE__,
+        DOCA_LOG(LOG_ERR, "[%s:%d] cuda failed with %s", __FILE__, __LINE__,
                  cudaGetErrorString(result));
         return DOCA_ERROR_BAD_STATE;
     }
