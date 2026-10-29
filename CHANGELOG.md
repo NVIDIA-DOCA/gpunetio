@@ -32,6 +32,7 @@
 - Updated the examples to validate their command-line values and to check, when the peers connect, that both run the same example with the same number of iterations and CUDA threads.
 - Updated the put/write bandwidth example servers to validate the received data once the client reports that all its runs have completed, instead of waiting for ctrl+c. A client that closes the connection without reporting it, for example on an error, fails the server.
 - Updated the put bandwidth example kernel to wait for the last put only, instead of polling the completion of every put.
+- QP attribute `log_ack_req_freq` set to 8 instead of 0
 
 ### Fixed
 
