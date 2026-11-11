@@ -90,6 +90,8 @@ LIB_FULL_NAME := $(LIB_BASENAME).$(LIB_VER)
 LIBS := $(LIB_DIR)/$(LIB_BASENAME) $(LIB_DIR)/$(LIB_BASENAME).$(MAJOR_VER) $(LIB_DIR)/$(LIB_BASENAME).$(VER)
 
 LIBSRCS := doca_verbs_dev.cpp doca_verbs_qp.cpp doca_verbs_cq.cpp doca_verbs_device_attr.cpp doca_verbs_umem.cpp doca_verbs_srq.cpp doca_verbs_uar.cpp doca_gpunetio.cpp doca_gpunetio_log.cpp doca_gpunetio_high_level.cpp doca_gpunetio_gdrcopy.cpp doca_gpunetio_signal_map.cpp
+LIBSRCS += gpu_dev_compat/doca_gpunetio_dev_compat.cpp gpu_dev_compat/doca_gpunetio_dev_verbs_v1.cpp
+
 ifeq ($(USE_CUDA_WRAPPER), 1)
 LIBSRCS += doca_gpunetio_cuda_wrapper.cpp
 CXXFLAGS += -DDOCA_GPUNETIO_USE_CUDA_WRAPPER
@@ -134,6 +136,8 @@ install_lib: lib
 	install -d $(INC_INSTALL_DIR)/common
 	install -d $(INC_INSTALL_DIR)/device
 	install -d $(INC_INSTALL_DIR)/host
+	install -d $(SRC_INSTALL_DIR)/src/gpu_dev_compat
+	install -m 644 $(wildcard $(SRC_DIR)/gpu_dev_compat/*.cpp $(SRC_DIR)/gpu_dev_compat/*.hpp $(SRC_DIR)/gpu_dev_compat/*.h) $(SRC_INSTALL_DIR)/src/gpu_dev_compat/
 	install -m 644 $(wildcard $(INC_DIR)/common/*.h $(INC_DIR)/common/*.cuh) $(INC_INSTALL_DIR)/common/
 	install -m 644 $(wildcard $(INC_DIR)/device/*.h $(INC_DIR)/device/*.cuh) $(INC_INSTALL_DIR)/device/
 	install -m 644 $(wildcard $(INC_DIR)/host/*.h $(INC_DIR)/host/*.cuh) $(INC_INSTALL_DIR)/host/
@@ -204,6 +208,7 @@ else
 $(LIBOBJS): $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp lib_configure
 endif
 	@ echo "Compiling $< -> $@"
+	@ mkdir -p $(@D)
 	$(CXX) $(LIB_CXXFLAGS) -c $< -o $@ -I$(INC_DIR) -I$(CUDA_HOME)/include -fPIC
 
 lib_configure:

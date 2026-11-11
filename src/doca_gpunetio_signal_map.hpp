@@ -34,7 +34,6 @@ struct doca_gpu_verbs_signal_entry {
     doca_gpu_verbs_signal_value_t *gpu_addr;
     struct doca_gpu_verbs_signal_page *page;
     doca_gpu_verbs_signal_value_t shadow;
-    bool needs_mcst;
 };
 
 struct doca_gpu_verbs_signal_lookup_block {
@@ -47,7 +46,6 @@ struct doca_gpu_verbs_signal_map {
     std::unordered_set<uintptr_t> *registered_slots;
     struct doca_gpu_verbs_signal_lookup_block
         *lookup_blocks[DOCA_GPUNETIO_VERBS_SIGNAL_LOOKUP_BLOCK_COUNT];
-    bool attached_to_service;
 
     uint64_t dropped_signals;
     bool dropped_op_logged;
@@ -55,6 +53,7 @@ struct doca_gpu_verbs_signal_map {
     bool dropped_mapping_logged;
     bool wrapped_logged;
 
+    bool needs_mcst;
     bool data_direct_mode;
 };
 
@@ -68,14 +67,5 @@ struct doca_gpu_verbs_signal_map {
  */
 doca_error_t priv_signal_map_apply(struct doca_gpu_verbs_signal_map *map, uint32_t imm,
                                    bool use_data_direct);
-
-/**
- * Transfer one delivery owner's attachment from old_map to new_map.
- *
- * The caller must exclude its delivery thread while this runs. Attachment makes a map immutable
- * through the public register, unregister, and destroy APIs.
- */
-doca_error_t priv_signal_map_replace_attachment(struct doca_gpu_verbs_signal_map *old_map,
-                                                struct doca_gpu_verbs_signal_map *new_map);
 
 #endif /* DOCA_GPUNETIO_SIGNAL_MAP_HPP */

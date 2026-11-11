@@ -409,6 +409,7 @@ enum doca_gpu_dev_verbs_cq_type : uint8_t {
 
 enum doca_gpu_dev_verbs_signal_op {
     DOCA_GPUNETIO_VERBS_SIGNAL_OP_ADD = 0,  ///< Signal operation - Add
+    DOCA_GPUNETIO_VERBS_SIGNAL_OP_SET = 1,  ///< Signal operation - Set
 };
 
 enum doca_gpu_dev_verbs_dump_mode {
