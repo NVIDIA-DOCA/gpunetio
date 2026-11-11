@@ -34,7 +34,7 @@
  * @return: EXIT_SUCCESS on success and EXIT_FAILURE otherwise
  */
 int main(int argc, char **argv) {
-    struct verbs_config verbs_cfg;
+    struct verbs_config verbs_cfg = {};
     doca_error_t status;
     int exit_status = EXIT_FAILURE;
     int option;
@@ -46,10 +46,17 @@ int main(int argc, char **argv) {
     verbs_cfg.cuda_threads = CUDA_THREADS_BW;
     verbs_cfg.nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO;
     verbs_cfg.exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD;
+    verbs_cfg.enable_data_direct = false;
 
-    while ((option = getopt(argc, argv, "c:d:e:g:i:l:p:")) != -1) {
+    while ((option = getopt(argc, argv, "c:d:e:g:i:l:p:z:")) != -1) {
         switch (option) {
             case 'c': {
+                struct in_addr addr;
+                if (inet_pton(AF_INET, optarg, &addr) != 1) {
+                    DOCA_LOG(LOG_ERR, "Entered server address %s is not a valid IPv4 address",
+                             optarg);
+                    return 1;
+                }
                 verbs_cfg.server_ip_addr = optarg;
                 verbs_cfg.is_server = false;
                 break;
@@ -62,7 +69,10 @@ int main(int argc, char **argv) {
                 int exec_scope = std::atoi(optarg);
                 if (exec_scope != DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD &&
                     exec_scope != DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP) {
-                    DOCA_LOG(LOG_ERR, "Exec policy must be included between 0 and 2");
+                    DOCA_LOG(LOG_ERR,
+                             "Execution scope must be %d (thread) or %d (warp), requested %d",
+                             DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD,
+                             DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP, exec_scope);
                     return 1;
                 }
                 verbs_cfg.exec_scope = (enum doca_gpu_dev_verbs_exec_scope)exec_scope;
@@ -73,51 +83,84 @@ int main(int argc, char **argv) {
                 break;
             }
             case 'i': {
-                verbs_cfg.num_iters = std::atoi(optarg);
-                if ((verbs_cfg.num_iters % verbs_cfg.cuda_threads) != 0) {
-                    DOCA_LOG(LOG_ERR, "Iterations must be a multiple of CUDA threads number (%d)",
-                             verbs_cfg.cuda_threads);
+                int iters = std::atoi(optarg);
+                if (iters <= 0) {
+                    DOCA_LOG(LOG_ERR, "Number of iterations must be greater than 0, requested %d",
+                             iters);
                     return 1;
                 }
+                verbs_cfg.num_iters = (uint32_t)iters;
                 break;
             }
             case 'l': {
-                verbs_cfg.gid_index = std::atoi(optarg);
+                int gid_index = std::atoi(optarg);
+                if (gid_index < 0) {
+                    DOCA_LOG(LOG_ERR, "GID index must be non-negative, requested %d", gid_index);
+                    return 1;
+                }
+                verbs_cfg.gid_index = (uint32_t)gid_index;
                 break;
             }
             case 'p': {
-                verbs_cfg.nic_handler = (enum doca_gpu_dev_verbs_nic_handler)std::atoi(optarg);
-                if (verbs_cfg.nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF) {
+                int nic_handler = std::atoi(optarg);
+                if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF) {
                     DOCA_LOG(LOG_ERR, "NIC handler BlueFlame not supported in this example");
                     return 1;
                 }
+                if (nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO &&
+                    nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY &&
+                    nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB &&
+                    nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_NO_DBR &&
+                    nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW) {
+                    DOCA_LOG(LOG_ERR,
+                             "NIC handler must be %d (AUTO), %d (CPU proxy), %d (GPU SM DB), %d "
+                             "(GPU SM no DBR) or %d (CPU proxy free flow), requested %d",
+                             DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+                             DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY,
+                             DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB,
+                             DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_NO_DBR,
+                             DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW, nic_handler);
+                    return 1;
+                }
+                verbs_cfg.nic_handler = (enum doca_gpu_dev_verbs_nic_handler)nic_handler;
+                break;
+            }
+            case 'z': {
+                verbs_cfg.enable_data_direct = (std::atoi(optarg) != 0);
                 break;
             }
             default:
-                std::cerr << "Usage: " << argv[0] << "\n"
-                          << " -c <server_ip> (Client only)\n"
-                          << " -d <mlx5_X device name>\n"
-                          << " -e <exec scope. 0: THREAD 1: WARP (default: 0)>\n"
-                          << " -g <GPU PCIe address>\n"
-                          << " -i <number of iterations (default: 2048)>\n"
-                          << " -l <GID Index (default: 0)>\n"
-                          << " -p <NIC handler. 0: AUTO 1: CPU PROXY 2: GPU SM_DB 6: GPU BF "
-                             "(default: 0)>\n"
-                          << std::endl;
+                std::cerr
+                    << "Usage: " << argv[0] << "\n"
+                    << " -c <server_ip> (Client only)\n"
+                    << " -d <mlx5_X device name>\n"
+                    << " -e <exec scope. 0: THREAD 1: WARP (default: 0)>\n"
+                    << " -g <GPU PCIe address>\n"
+                    << " -i <number of iterations, a multiple of " << CUDA_THREADS_BW
+                    << " (default: " << NUM_ITERS << ")>\n"
+                    << " -l <GID Index (default: 0)>\n"
+                    << " -p <NIC handler. 0: AUTO 1: CPU PROXY 2: GPU SM_DB 10: GPU SM no DBR "
+                       "17: CPU PROXY free flow (default: 0)>\n"
+                    << " -z <Data Direct. 0: disabled 1: enabled (default: 0)>\n"
+                    << std::endl;
                 return 1;
         }
     }
 
+    /* The kernel splits the CUDA threads over VERBS_CUDA_BLOCK CUDA blocks */
+    status = verbs_validate_config(&verbs_cfg, VERBS_CUDA_BLOCK, 0);
+    if (status != DOCA_SUCCESS) goto sample_exit;
+
     if (verbs_cfg.is_server) {
         status = verbs_server(&verbs_cfg);
         if (status != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "verbs_server() failed");
+            DOCA_LOG(LOG_ERR, "verbs_server() failed: %d", status);
             goto sample_exit;
         }
     } else {
         status = verbs_client(&verbs_cfg);
         if (status != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "verbs_client() failed");
+            DOCA_LOG(LOG_ERR, "verbs_client() failed: %d", status);
             goto sample_exit;
         }
     }

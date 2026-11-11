@@ -240,6 +240,79 @@ Validation success message (server):
 Validation successful! Data received correctly from client.
 ```
 
+### Example 4: `gpunetio_verbs_get_bw`
+
+This example is a GDAKI perftest `ib_read_bw`-like benchmark where client launches a CUDA kernel to execute the high-level `doca_gpu_dev_verbs_get` operation, reading the server buffers into its GPU memory.
+Server doesn't launch any CUDA kernel: it keeps its buffers registered until the client reports that all its runs have completed and that the data it read is correct. Server fails if the client closes the connection first, for example on an error or a validation failure, or if ctrl+c stops the wait.
+On GPUs older than Hopper, the kernel waits for the gets with `doca_gpu_dev_verbs_get_wait` and `DOCA_GPUNETIO_VERBS_MCST_ENABLED`: a Dump WQE then makes the data the NIC wrote into GPU memory visible to the GPU.
+
+**Run (server):**
+```bash
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=6 ./gpunetio_verbs_get_bw -g 8A:00.0 -d mlx5_0
+```
+
+**Run (client):**
+```bash
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=6 ./gpunetio_verbs_get_bw -g 8A:00.0 -d mlx5_0 -c <server_ip_address>
+```
+
+Modes:
+- **CUDA Thread execution scope** (default).
+- **CUDA Warp execution scope**: add `-e 1`.
+- **NIC handler type**: add `-p <nic_handler value>` where 0: AUTO (default), 1: CPU Proxy, 2: GPU SM DB, 10: GPU SM no DBR, 17: CPU Proxy free flow.
+- **Data Direct**: add `-z 1`. The server buffers are then in GPU memory too.
+
+Validation success message (client):
+```
+Validation successful! Data read correctly from server
+```
+
+### Example 5: `gpunetio_verbs_put_signal_bw`
+
+This example is a GDAKI perftest `ib_write_bw`-like benchmark where client launches a CUDA kernel to execute the high-level `doca_gpu_dev_verbs_put_signal` operation: each CUDA thread writes its own chunk of the server buffer, then adds 1 to its own server signal with an atomic fetch and add, which returns the previous signal value to the client.
+Server doesn't launch any CUDA kernel: once the client reports that all its runs have completed, server validates the data received from client, logs the sum of its signal values for each message size and exits. Server fails without validating if the client closes the connection first, for example on an error, or if ctrl+c stops the wait.
+
+**Run (server):**
+```bash
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=6 ./gpunetio_verbs_put_signal_bw -g 8A:00.0 -d mlx5_0
+```
+
+**Run (client):**
+```bash
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=6 ./gpunetio_verbs_put_signal_bw -g 8A:00.0 -d mlx5_0 -c <server_ip_address>
+```
+
+Modes:
+- **CUDA Thread execution scope** (default).
+- **CUDA Warp execution scope**: add `-e 1`. Each warp then posts the puts of its threads together with a single fetch and add, on the signal of its lane 0.
+- **NIC handler type**: add `-p <nic_handler value>` where 0: AUTO (default), 1: CPU Proxy, 2: GPU SM DB, 10: GPU SM no DBR, 17: CPU Proxy free flow.
+- **Data Direct**: add `-z 1`. The server buffers and signals are then in GPU memory too.
+
+Validation success message (server):
+```
+Validation successful! Data received correctly from client
+```
+
+### Example 6: `gpunetio_verbs_put_signal_lat`
+
+This example is a GDAKI perftest `ib_write_lat`-like benchmark where client and server both launch a single CUDA thread kernel. Each message is a high-level `doca_gpu_dev_verbs_put_signal` operation, and each side polls its own signal, which the other side increments after writing the message, to know when the message has arrived.
+
+**Run (server):**
+```bash
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=6 ./gpunetio_verbs_put_signal_lat -g 8A:00.0 -d mlx5_0
+```
+
+**Run (client):**
+```bash
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=6 ./gpunetio_verbs_put_signal_lat -g 8A:00.0 -d mlx5_0 -c <server_ip_address>
+```
+
+Modes:
+- **NIC handler type**: add `-p <nic_handler value>` where 0: AUTO (default), 1: CPU Proxy, 2: GPU SM DB, 10: GPU SM no DBR, 17: CPU Proxy free flow.
+- **Data Direct**: add `-z 1`.
+
+GPU SM BlueFlame is not supported in this example.
+
 ## Acknowledgments
 
 If you use this software in your work, please cite the official [DOCA GPUNetIO documentation](https://docs.nvidia.com/doca/sdk/doca+gpunetio/index.html).

@@ -48,11 +48,10 @@ __global__ void put_bw(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, uin
                        uint8_t *src_buf, uint32_t src_buf_mkey, uint8_t *dst_buf,
                        uint32_t dst_buf_mkey) {
     doca_gpu_dev_verbs_ticket_t out_ticket;
-    uint32_t lane_idx = doca_gpu_dev_verbs_get_lane_id();
     uint32_t tidx = threadIdx.x + (blockIdx.x * blockDim.x);
 
 #if KERNEL_DEBUG_TIMES == 1
-    unsigned long long step1 = 0, step2 = 0, step3 = 0;
+    unsigned long long step1 = 0, step2 = 0;
 #endif
 
     for (uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < num_iters;
@@ -74,37 +73,20 @@ __global__ void put_bw(struct doca_gpu_dev_verbs_qp *qp, uint32_t num_iters, uin
         step2 = doca_gpu_dev_verbs_query_globaltimer();
 #endif
 
-        if (scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD) {
-            if (doca_gpu_dev_verbs_poll_cq_at<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(
-                    qp, out_ticket) != 0) {
-#if ENABLE_DEBUG == 1
-                printf("Error CQE!\n");
-#endif
-            }
-        }
-
-        if (scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP) {
-            if (lane_idx == 0) {
-                if (doca_gpu_dev_verbs_poll_cq_at<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(
-                        qp, out_ticket + DOCA_GPUNETIO_VERBS_WARP_SIZE - 1) != 0) {
-#if ENABLE_DEBUG == 1
-                    printf("Error CQE!\n");
-#endif
-                }
-            }
-        }
-#if KERNEL_DEBUG_TIMES == 1
-        step3 = doca_gpu_dev_verbs_query_globaltimer();
-#endif
-
         __syncthreads();
 
 #if KERNEL_DEBUG_TIMES == 1
         if (threadIdx.x == 0)
-            printf("iteration %d src_buf %lx size %d dst_buf %lx put %ld ns, poll %ld ns\n", idx,
-                   src_buf, data_size, dst_buf, step2 - step1, step3 - step2);
+            printf("iteration %d src_buf %lx size %d dst_buf %lx put %ld ns\n", idx, src_buf,
+                   data_size, dst_buf, step2 - step1);
 #endif
     }
+
+    /*
+     * The put waits for a free send queue slot by itself, so there is no need to poll each
+     * completion: wait only for the last posted put, which completes after all the previous ones.
+     */
+    doca_gpu_dev_verbs_wait<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(qp);
 }
 
 extern "C" {
@@ -119,7 +101,7 @@ doca_error_t gpunetio_verbs_put_bw(cudaStream_t stream, struct doca_gpu_dev_verb
     /* Check no previous CUDA errors */
     result = cudaGetLastError();
     if (cudaSuccess != result) {
-        DOCA_LOG(LOG_ERR, "[%s:%d] cuda failed with %s \n", __FILE__, __LINE__,
+        DOCA_LOG(LOG_ERR, "[%s:%d] cuda failed with %s", __FILE__, __LINE__,
                  cudaGetErrorString(result));
         return DOCA_ERROR_BAD_STATE;
     }
@@ -130,10 +112,14 @@ doca_error_t gpunetio_verbs_put_bw(cudaStream_t stream, struct doca_gpu_dev_verb
     else if (scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP)
         put_bw<DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP><<<cuda_blocks, cuda_threads, 0, stream>>>(
             qp, num_iters, data_size, src_buf, src_buf_mkey, dst_buf, dst_buf_mkey);
+    else {
+        DOCA_LOG(LOG_ERR, "Invalid exec scope %d, must be thread or warp", scope);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
 
     result = cudaGetLastError();
     if (cudaSuccess != result) {
-        DOCA_LOG(LOG_ERR, "[%s:%d] cuda failed with %s \n", __FILE__, __LINE__,
+        DOCA_LOG(LOG_ERR, "[%s:%d] cuda failed with %s", __FILE__, __LINE__,
                  cudaGetErrorString(result));
         return DOCA_ERROR_BAD_STATE;
     }
