@@ -84,6 +84,45 @@ __global__ void put_signal_lat(struct doca_gpu_dev_verbs_qp *qp, uint32_t start_
     doca_gpu_dev_verbs_wait<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE>(qp);
 }
 
+/*
+ * Same ping-pong latency test, signalling with an RDMA Write with Immediate instead of an RDMA
+ * Write followed by an RDMA Atomic Fetch and Add: each message is a single operation, whose
+ * immediate carries the signal id of the remote peer and the value 1 to add to it. The signal map
+ * of that peer resolves the id into a slot of its GPU memory, which its kernel polls, so there is
+ * no remote signal address, no memory key, and no previous value returned to this peer.
+ * The code assumes the CUDA kernel is launched with only 1 CUDA thread.
+ */
+template <bool is_client>
+__global__ void put_immediate_lat(struct doca_gpu_dev_verbs_qp *qp, uint32_t start_iters,
+                                  uint32_t num_iters, uint32_t data_size, uint8_t *src_buf,
+                                  uint32_t src_buf_mkey, uint64_t *local_flag, uint8_t *dst_buf,
+                                  uint32_t dst_buf_mkey, uint32_t remote_sig_id) {
+    for (uint32_t iter_idx = 0; iter_idx < num_iters; iter_idx++) {
+        /* The server replies to each message of the client */
+        if (!is_client) {
+            while (DOCA_GPUNETIO_VOLATILE(*local_flag) < (uint64_t)start_iters + iter_idx + 1);
+            doca_gpu_dev_verbs_fence_acquire<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_SYS>();
+        }
+
+        /* Exclusive sharing mode: a single CUDA thread uses the QP */
+        doca_gpu_dev_verbs_put_immediate<DOCA_GPUNETIO_VERBS_SIGNAL_OP_ADD,
+                                         DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE,
+                                         DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>(
+            qp, doca_gpu_dev_verbs_addr{.addr = (uint64_t)dst_buf, .key = (uint32_t)dst_buf_mkey},
+            doca_gpu_dev_verbs_addr{.addr = (uint64_t)src_buf, .key = (uint32_t)src_buf_mkey},
+            data_size, remote_sig_id, (uint16_t)1);
+
+        /* The client waits for the reply before sending the next message */
+        if (is_client) {
+            while (DOCA_GPUNETIO_VOLATILE(*local_flag) < (uint64_t)start_iters + iter_idx + 1);
+            doca_gpu_dev_verbs_fence_acquire<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_SYS>();
+        }
+    }
+
+    /* Wait for the last put with immediate, which completes after all the previous WQEs */
+    doca_gpu_dev_verbs_wait<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE>(qp);
+}
+
 extern "C" {
 
 doca_error_t gpunetio_verbs_put_signal_lat(
@@ -122,6 +161,60 @@ doca_error_t gpunetio_verbs_put_signal_lat(
         put_signal_lat<false><<<cuda_blocks, cuda_threads, 0, stream>>>(
             qp, start_iters, num_iters, data_size, src_buf, src_buf_mkey, local_flag, prev_flag_buf,
             prev_flag_buf_mkey, dst_buf, dst_buf_mkey, dst_flag, dst_flag_mkey);
+
+    result = cudaGetLastError();
+    if (cudaSuccess != result) {
+        DOCA_LOG(LOG_ERR, "[%s:%d] cuda failed with %s", __FILE__, __LINE__,
+                 cudaGetErrorString(result));
+        return DOCA_ERROR_BAD_STATE;
+    }
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t gpunetio_verbs_put_immediate_lat(cudaStream_t stream, struct doca_gpu_dev_verbs_qp *qp,
+                                              uint32_t start_iters, uint32_t num_iters,
+                                              uint32_t cuda_blocks, uint32_t cuda_threads,
+                                              uint32_t data_size, uint8_t *src_buf,
+                                              uint32_t src_buf_mkey, uint64_t *local_flag,
+                                              uint8_t *dst_buf, uint32_t dst_buf_mkey,
+                                              uint32_t remote_sig_id, bool is_client) {
+    cudaError_t result = cudaSuccess;
+
+    /* Check no previous CUDA errors */
+    result = cudaGetLastError();
+    if (cudaSuccess != result) {
+        DOCA_LOG(LOG_ERR, "[%s:%d] cuda failed with %s", __FILE__, __LINE__,
+                 cudaGetErrorString(result));
+        return DOCA_ERROR_BAD_STATE;
+    }
+
+    if (cuda_blocks != 1) {
+        DOCA_LOG(LOG_ERR, "The kernel supports only 1 CUDA Block, requested cuda_blocks=%u",
+                 cuda_blocks);
+        return DOCA_ERROR_BAD_STATE;
+    }
+
+    if (cuda_threads != 1) {
+        DOCA_LOG(LOG_ERR, "The kernel supports only 1 CUDA Thread, requested cuda_threads=%u",
+                 cuda_threads);
+        return DOCA_ERROR_BAD_STATE;
+    }
+
+    if (remote_sig_id >= DOCA_GPUNETIO_VERBS_SIGNAL_MAX_SIGNALS) {
+        DOCA_LOG(LOG_ERR, "Signal id %u doesn't fit the %llu signals of a signal map",
+                 remote_sig_id, (unsigned long long)DOCA_GPUNETIO_VERBS_SIGNAL_MAX_SIGNALS);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (is_client)
+        put_immediate_lat<true><<<cuda_blocks, cuda_threads, 0, stream>>>(
+            qp, start_iters, num_iters, data_size, src_buf, src_buf_mkey, local_flag, dst_buf,
+            dst_buf_mkey, remote_sig_id);
+    else
+        put_immediate_lat<false><<<cuda_blocks, cuda_threads, 0, stream>>>(
+            qp, start_iters, num_iters, data_size, src_buf, src_buf_mkey, local_flag, dst_buf,
+            dst_buf_mkey, remote_sig_id);
 
     result = cudaGetLastError();
     if (cudaSuccess != result) {

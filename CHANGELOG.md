@@ -1,5 +1,12 @@
 # Changelog
 
+## [main]
+
+### Added
+
+- Added the RDMA Write with Immediate mode (`-w 1`) to the `gpunetio_verbs_put_signal_bw` and `gpunetio_verbs_put_signal_lat` examples: each message is a `doca_gpu_dev_verbs_put_immediate` whose immediate carries a signal id, the receiving peer creates a rank-local signal map and registers its signals into it, and a service monitoring the QP drains its receive queue into the map. The QPs are created with a receive queue, their signals are GPU memory slots with no memory region, and they retry RNR indefinitely while the service of the peer returns the receive credits. The bandwidth example registers one signal per CUDA thread and message size with `doca_gpu_verbs_signal_register_range()`, the latency example one signal per message size with `doca_gpu_verbs_signal_register()`. The bandwidth server keeps its service running until every signal reaches its final value, within a 10 second timeout, as the client completing its writes doesn't mean the service has delivered their signals, and then checks the value of each signal.
+- Backward Compatibility Layer: Added `_ver` entry points that take the device code version and export the QP block in the layout that device code reads. Device code older than 4.0.0 is still supported; unsupported configurations are refused with `DOCA_ERROR_NOT_SUPPORTED`.
+
 ## [5.0.0]
 
 ### Added
@@ -32,7 +39,6 @@
 - Updated the examples to validate their command-line values and to check, when the peers connect, that both run the same example with the same number of iterations and CUDA threads.
 - Updated the put/write bandwidth example servers to validate the received data once the client reports that all its runs have completed, instead of waiting for ctrl+c. A client that closes the connection without reporting it, for example on an error, fails the server.
 - Updated the put bandwidth example kernel to wait for the last put only, instead of polling the completion of every put.
-- QP attribute `log_ack_req_freq` set to 8 instead of 0
 
 ### Fixed
 

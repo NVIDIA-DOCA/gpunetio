@@ -193,6 +193,7 @@ doca_error_t verbs_oob_check_config(int sock_fd, const char *sample_name,
     strncpy(local.sample_name, sample_name, sizeof(local.sample_name) - 1);
     local.num_iters = htonl(cfg->num_iters);
     local.cuda_threads = htonl(cfg->cuda_threads);
+    local.use_write_imm = htonl(cfg->use_write_imm ? 1 : 0);
 
     if (verbs_oob_send(sock_fd, &local, sizeof(local)) != 0) {
         DOCA_LOG(LOG_ERR, "Failed to send local configuration to remote peer");
@@ -211,12 +212,14 @@ doca_error_t verbs_oob_check_config(int sock_fd, const char *sample_name,
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    if (local.num_iters != remote.num_iters || local.cuda_threads != remote.cuda_threads) {
+    if (local.num_iters != remote.num_iters || local.cuda_threads != remote.cuda_threads ||
+        local.use_write_imm != remote.use_write_imm) {
         DOCA_LOG(LOG_ERR,
-                 "Configuration mismatch with remote peer: local iters %u threads %u, remote iters "
-                 "%u threads %u. Both sides must use the same options",
-                 cfg->num_iters, cfg->cuda_threads, ntohl(remote.num_iters),
-                 ntohl(remote.cuda_threads));
+                 "Configuration mismatch with remote peer: local iters %u threads %u write "
+                 "immediate %u, remote iters %u threads %u write immediate %u. Both sides must use "
+                 "the same options",
+                 cfg->num_iters, cfg->cuda_threads, cfg->use_write_imm ? 1 : 0,
+                 ntohl(remote.num_iters), ntohl(remote.cuda_threads), ntohl(remote.use_write_imm));
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -661,6 +664,8 @@ doca_error_t create_verbs_resources(struct verbs_config *cfg, struct verbs_resou
     qp_init.net_dev = resources->net_dev;
     qp_init.ibpd = resources->verbs_pd;
     qp_init.sq_nwqe = VERBS_TEST_QUEUE_SIZE;
+    /* An RDMA Write with Immediate consumes a receive WQE on the peer that receives it */
+    qp_init.rq_nwqe = cfg->use_write_imm ? VERBS_TEST_QUEUE_SIZE : 0;
     qp_init.nic_handler = resources->nic_handler;
     qp_init.mreg_type = DOCA_GPUNETIO_VERBS_MEM_REG_TYPE_DEFAULT;
     qp_init.send_dbr_mode_ext = resources->send_dbr_mode_ext;
@@ -751,6 +756,11 @@ doca_error_t destroy_verbs_resources(struct verbs_resources *resources) {
      * may be missing. Keep going on errors so one failure does not leak everything created after
      * it, and clear each pointer so a second call is harmless.
      */
+
+    /* The QP can't be destroyed while a service monitors it */
+    status = verbs_signal_service_stop(resources);
+    if (status != DOCA_SUCCESS && result == DOCA_SUCCESS) result = status;
+
     if (resources->qp != NULL) {
         /* Also frees the high-level QP object */
         status = doca_gpu_verbs_destroy_qp_hl(resources->qp);
@@ -897,7 +907,12 @@ doca_error_t connect_verbs_qp(struct verbs_resources *resources) {
         goto destroy_verbs_qp_attr;
     }
 
-    status = doca_verbs_qp_attr_set_rnr_retry(verbs_qp_attr, 1);
+    /*
+     * The service thread of the remote peer returns the receive credits of its RQ asynchronously:
+     * retry indefinitely while it is behind, instead of failing the QP. Keep the finite policy of
+     * the other modes, where the peer has no RQ
+     */
+    status = doca_verbs_qp_attr_set_rnr_retry(verbs_qp_attr, resources->cfg->use_write_imm ? 7 : 1);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to set RNR retry: %d", status);
         goto destroy_verbs_qp_attr;
@@ -1138,6 +1153,99 @@ doca_error_t verbs_reg_gpu_mr(struct verbs_resources *resources, void *buf, size
                  strerror(errno));
         return DOCA_ERROR_DRIVER;
     }
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t verbs_signal_map_create(struct verbs_resources *resources) {
+    doca_error_t status;
+
+    if (resources->signal_map != NULL) return DOCA_SUCCESS;
+
+    /*
+     * The map is rank-local: it resolves the signal id packed in the immediate of each RDMA Write
+     * with Immediate the NIC receives into an 8 bytes slot of GPU memory this peer owns, and adds
+     * the signal value to it
+     */
+    status = doca_gpu_verbs_signal_map_create(&resources->signal_map);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to create the signal map: %d", status);
+        resources->signal_map = NULL;
+        return status;
+    }
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t verbs_signal_map_destroy(struct verbs_resources *resources) {
+    doca_error_t status;
+
+    if (resources->signal_map == NULL) return DOCA_SUCCESS;
+
+    status = doca_gpu_verbs_signal_map_destroy(resources->signal_map);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to destroy the signal map: %d", status);
+        return status;
+    }
+    resources->signal_map = NULL;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t verbs_signal_service_start(struct verbs_resources *resources) {
+    doca_error_t status;
+
+    if (resources->signal_map == NULL) {
+        DOCA_LOG(LOG_ERR, "The signal map must be created before the service");
+        return DOCA_ERROR_BAD_STATE;
+    }
+
+    if (resources->signal_service != NULL) return DOCA_SUCCESS;
+
+    status = doca_gpu_verbs_create_service(&resources->signal_service);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to create the signal service: %d", status);
+        resources->signal_service = NULL;
+        return status;
+    }
+
+    /* The map is rank-local, so it is set on the service and not on each QP */
+    status =
+        doca_gpu_verbs_service_set_signal_map(resources->signal_service, resources->signal_map);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to set the signal map of the service: %d", status);
+        goto stop_service;
+    }
+
+    /* From now on the service thread drains the receive queue of the QP into the map */
+    status = doca_gpu_verbs_service_monitor_qp(resources->signal_service, resources->qp->qp_gverbs);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to monitor the QP with the signal service: %d", status);
+        goto stop_service;
+    }
+
+    return DOCA_SUCCESS;
+
+stop_service:
+    (void)verbs_signal_service_stop(resources);
+    return status;
+}
+
+doca_error_t verbs_signal_service_stop(struct verbs_resources *resources) {
+    doca_error_t status;
+
+    if (resources->signal_service == NULL) return DOCA_SUCCESS;
+
+    /*
+     * Stops the delivery into the signal map and the monitoring of the QP: the signals can be
+     * unregistered, and the QP destroyed, only after this
+     */
+    status = doca_gpu_verbs_destroy_service(resources->signal_service);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to destroy the signal service: %d", status);
+        return status;
+    }
+    resources->signal_service = NULL;
 
     return DOCA_SUCCESS;
 }

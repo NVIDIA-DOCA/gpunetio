@@ -103,7 +103,8 @@ static doca_error_t destroy_local_memory_objects(struct verbs_resources *resourc
  * @size [in]: Buffer size
  * @access_flags [in]: Access flags of the memory region
  * @flag_buf [out]: GPU buffer, set as soon as it is allocated so that the caller can free it
- * @flag_mr [out]: Memory region
+ * @flag_mr [out]: Memory region, NULL for a buffer the NIC doesn't access directly, like the
+ * slots of a signal map
  * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
  */
 static doca_error_t create_gpu_flags(struct verbs_resources *resources, size_t size,
@@ -125,6 +126,8 @@ static doca_error_t create_gpu_flags(struct verbs_resources *resources, size_t s
                  cudaGetErrorString(cuda_ret));
         return DOCA_ERROR_DRIVER;
     }
+
+    if (flag_mr == NULL) return DOCA_SUCCESS;
 
     return verbs_reg_gpu_mr(resources, *flag_buf, size, access_flags, flag_mr);
 }
@@ -166,6 +169,17 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
             IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_RELAXED_ORDERING,
             &resources->data_mr[idx]);
         if (status != DOCA_SUCCESS) goto exit_error;
+
+        /*
+         * The slot of the local signal map the remote peer signals with the immediate of its RDMA
+         * Write with Immediate: no memory region, as the NIC never writes it directly
+         */
+        if (resources->cfg->use_write_imm) {
+            status = create_gpu_flags(resources, size_flag, 0, &resources->flag_buf[idx], NULL);
+            if (status != DOCA_SUCCESS) goto exit_error;
+
+            continue;
+        }
 
         /* The signal the remote peer increments. No relaxed ordering: the NIC write of a signal
          * must not pass the data writes before it */
@@ -212,6 +226,9 @@ static doca_error_t exchange_params_with_remote_peer(struct verbs_resources *res
                 return DOCA_ERROR_CONNECTION_ABORTED;
             }
 
+            /* Each peer signals a signal id of the remote signal map, not an address */
+            if (resources->cfg->use_write_imm) continue;
+
             local_addr = (uint64_t)resources->flag_buf[idx];
             if (verbs_oob_send(resources->conn_socket, &local_addr, sizeof(uint64_t)) != 0) {
                 DOCA_LOG(LOG_ERR, "Failed to send local flag address");
@@ -237,6 +254,8 @@ static doca_error_t exchange_params_with_remote_peer(struct verbs_resources *res
                 DOCA_LOG(LOG_ERR, "Failed to receive remote MKEY, err = %d", errno);
                 return DOCA_ERROR_CONNECTION_ABORTED;
             }
+
+            if (resources->cfg->use_write_imm) continue;
 
             if (verbs_oob_recv(resources->conn_socket, &resources->remote_flag_buf[idx],
                                sizeof(uint64_t)) != 0) {
@@ -266,6 +285,8 @@ static doca_error_t exchange_params_with_remote_peer(struct verbs_resources *res
                 return DOCA_ERROR_CONNECTION_ABORTED;
             }
 
+            if (resources->cfg->use_write_imm) continue;
+
             if (verbs_oob_recv(resources->conn_socket, &resources->remote_flag_buf[idx],
                                sizeof(uint64_t)) != 0) {
                 DOCA_LOG(LOG_ERR, "Failed to receive remote flag address");
@@ -291,6 +312,9 @@ static doca_error_t exchange_params_with_remote_peer(struct verbs_resources *res
                 DOCA_LOG(LOG_ERR, "Failed to send local MKEY");
                 return DOCA_ERROR_CONNECTION_ABORTED;
             }
+
+            /* Each peer signals a signal id of the remote signal map, not an address */
+            if (resources->cfg->use_write_imm) continue;
 
             local_addr = (uint64_t)resources->flag_buf[idx];
             if (verbs_oob_send(resources->conn_socket, &local_addr, sizeof(uint64_t)) != 0) {
@@ -341,6 +365,96 @@ static doca_error_t exchange_params_with_remote_peer(struct verbs_resources *res
     }
 
     return DOCA_SUCCESS;
+}
+
+/* Message sizes whose signal is registered in the map, so that only those are unregistered */
+static int signals_registered = 0;
+
+/*
+ * Create the signal map of this peer and register its signals: one per message size. The map is
+ * rank-local, so both peers use the same ids, and each one signals the id of the message size it
+ * is sending
+ *
+ * @resources [in]: DOCA Verbs resources, with the signals already allocated in GPU memory
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t create_signal_resources(struct verbs_resources *resources) {
+    doca_error_t status;
+
+    status = verbs_signal_map_create(resources);
+    if (status != DOCA_SUCCESS) return status;
+
+    for (int idx = 0; idx < NUM_MSG_SIZE_LAT; idx++) {
+        status = doca_gpu_verbs_signal_register(resources->signal_map, (uint32_t)idx,
+                                                resources->flag_buf[idx]);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to register the signal %d of message size %d: %d", idx,
+                     message_size[idx], status);
+            return status;
+        }
+
+        signals_registered++;
+    }
+
+    /* The map must not be registered into while the service delivers signals into it */
+    return verbs_signal_service_start(resources);
+}
+
+/*
+ * Stop the delivery of the signals and release the signal map
+ *
+ * @resources [in]: DOCA Verbs resources
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t destroy_signal_resources(struct verbs_resources *resources) {
+    doca_error_t result = DOCA_SUCCESS, status;
+
+    status = verbs_signal_service_stop(resources);
+    if (status != DOCA_SUCCESS) result = status;
+
+    while (signals_registered > 0) {
+        const uint32_t sig_id = (uint32_t)(--signals_registered);
+
+        status = doca_gpu_verbs_signal_unregister(resources->signal_map, sig_id);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to unregister the signal %u: %d", sig_id, status);
+            if (result == DOCA_SUCCESS) result = status;
+        }
+    }
+
+    status = verbs_signal_map_destroy(resources);
+    if (status != DOCA_SUCCESS && result == DOCA_SUCCESS) result = status;
+
+    return result;
+}
+
+/*
+ * Launch the benchmark kernel of the mode in use, for one message size
+ *
+ * @resources [in]: DOCA Verbs resources
+ * @qp_gpu [in]: Verbs GPU object
+ * @idx [in]: Message size index
+ * @start_iters [in]: Number of iterations already run on the same signals
+ * @is_client [in]: This kernel should act like the client (true) or server (false)
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t launch_lat_kernel(struct verbs_resources *resources,
+                                      struct doca_gpu_dev_verbs_qp *qp_gpu, int idx,
+                                      uint32_t start_iters, bool is_client) {
+    if (resources->cfg->use_write_imm)
+        return gpunetio_verbs_put_immediate_lat(
+            cstream, qp_gpu, start_iters, resources->num_iters, NUM_QP, resources->cuda_threads,
+            message_size[idx], resources->data_buf[idx], htobe32(resources->data_mr[idx]->lkey),
+            resources->flag_buf[idx], (uint8_t *)(resources->remote_data_buf[idx]),
+            htobe32(resources->remote_data_mkey[idx]), (uint32_t)idx, is_client);
+
+    return gpunetio_verbs_put_signal_lat(
+        cstream, qp_gpu, start_iters, resources->num_iters, NUM_QP, resources->cuda_threads,
+        message_size[idx], resources->data_buf[idx], htobe32(resources->data_mr[idx]->lkey),
+        resources->flag_buf[idx], resources->prev_flag_buf[idx],
+        htobe32(resources->prev_flag_mr[idx]->lkey), (uint8_t *)(resources->remote_data_buf[idx]),
+        htobe32(resources->remote_data_mkey[idx]), (uint64_t *)(resources->remote_flag_buf[idx]),
+        htobe32(resources->remote_flag_mkey[idx]), is_client);
 }
 
 doca_error_t verbs_server(struct verbs_config *cfg) {
@@ -419,8 +533,9 @@ doca_error_t verbs_server(struct verbs_config *cfg) {
 
     DOCA_LOG(
         LOG_INFO,
-        "Launching gpunetio_verbs_put_signal_lat server kernel with %d CUDA Blocks, %d CUDA "
+        "Launching %s server kernel with %d CUDA Blocks, %d CUDA "
         "threads, %d total number of iterations, %d iterations per cuda thread, %d NIC handler",
+        cfg->use_write_imm ? "gpunetio_verbs_put_immediate_lat" : "gpunetio_verbs_put_signal_lat",
         NUM_QP, resources.cuda_threads, resources.num_iters,
         resources.num_iters / resources.cuda_threads, resources.nic_handler);
 
@@ -431,12 +546,25 @@ doca_error_t verbs_server(struct verbs_config *cfg) {
     }
 
     /*
+     * Both peers signal with an RDMA Write with Immediate: the service drains the receive queue of
+     * the QP and adds the value of each immediate to the signal of its id, which the kernel polls
+     */
+    if (cfg->use_write_imm) {
+        status = create_signal_resources(&resources);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to create the signal resources: %d", status);
+            goto destroy_events;
+        }
+    }
+
+    /*
      * A CPU thread progresses the QP for the GPU: it rings the NIC doorbell with the CPU proxy NIC
      * handlers (requested, or resolved from AUTO), or updates the DBR with the software-emulated no
      * DBR mode. It starts after doca_gpu_verbs_get_qp_dev(), which sets up what the thread reads in
-     * that mode.
+     * that mode. The service thread of the write immediate mode already does it for the QP it
+     * monitors.
      */
-    if (resources.qp->qp_gverbs->cpu_proxy) {
+    if (resources.qp->qp_gverbs->cpu_proxy && !cfg->use_write_imm) {
         args.qp_cpu = resources.qp->qp_gverbs;
         args.qp_cpu_companion = NULL;
         args.exit_flag = (uint64_t *)calloc(1, sizeof(uint64_t));
@@ -463,15 +591,9 @@ doca_error_t verbs_server(struct verbs_config *cfg) {
 
     for (int idx = 0; idx < NUM_MSG_SIZE_LAT; idx++) {
         /* Warmup per size*/
-        status = gpunetio_verbs_put_signal_lat(
-            cstream, qp_gpu, 0, resources.num_iters, NUM_QP, resources.cuda_threads,
-            message_size[idx], resources.data_buf[idx], htobe32(resources.data_mr[idx]->lkey),
-            resources.flag_buf[idx], resources.prev_flag_buf[idx],
-            htobe32(resources.prev_flag_mr[idx]->lkey), (uint8_t *)(resources.remote_data_buf[idx]),
-            htobe32(resources.remote_data_mkey[idx]), (uint64_t *)(resources.remote_flag_buf[idx]),
-            htobe32(resources.remote_flag_mkey[idx]), false);
+        status = launch_lat_kernel(&resources, qp_gpu, idx, 0, false);
         if (status != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "Function gpunetio_verbs_put_signal_lat failed: %d", status);
+            DOCA_LOG(LOG_ERR, "Failed to launch the warmup kernel: %d", status);
             goto stop_thread;
         }
 
@@ -483,16 +605,9 @@ doca_error_t verbs_server(struct verbs_config *cfg) {
         }
 
         /* Same signals as the warmup: they keep counting from where it stopped */
-        status = gpunetio_verbs_put_signal_lat(
-            cstream, qp_gpu, resources.num_iters, resources.num_iters, NUM_QP,
-            resources.cuda_threads, message_size[idx], resources.data_buf[idx],
-            htobe32(resources.data_mr[idx]->lkey), resources.flag_buf[idx],
-            resources.prev_flag_buf[idx], htobe32(resources.prev_flag_mr[idx]->lkey),
-            (uint8_t *)(resources.remote_data_buf[idx]), htobe32(resources.remote_data_mkey[idx]),
-            (uint64_t *)(resources.remote_flag_buf[idx]), htobe32(resources.remote_flag_mkey[idx]),
-            false);
+        status = launch_lat_kernel(&resources, qp_gpu, idx, resources.num_iters, false);
         if (status != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "Function gpunetio_verbs_put_signal_lat failed: %d", status);
+            DOCA_LOG(LOG_ERR, "Failed to launch the benchmark kernel: %d", status);
             goto stop_thread;
         }
 
@@ -540,6 +655,13 @@ destroy_events:
 
 server_cleanup:
     oob_verbs_connection_server_close(server_sock_fd, resources.conn_socket);
+
+    /* No signal can be delivered once the service stops: the slots can be freed */
+    tmp_status = destroy_signal_resources(&resources);
+    if (tmp_status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to destroy the signal resources: %d", tmp_status);
+        if (status == DOCA_SUCCESS) status = tmp_status;
+    }
 
     tmp_status = destroy_local_memory_objects(&resources);
     if (tmp_status != DOCA_SUCCESS) {
@@ -631,8 +753,9 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
 
     DOCA_LOG(
         LOG_INFO,
-        "Launching gpunetio_verbs_put_signal_lat client kernel with %d CUDA Blocks, %d CUDA "
+        "Launching %s client kernel with %d CUDA Blocks, %d CUDA "
         "threads, %d total number of iterations, %d iterations per cuda thread, %d NIC handler",
+        cfg->use_write_imm ? "gpunetio_verbs_put_immediate_lat" : "gpunetio_verbs_put_signal_lat",
         NUM_QP, resources.cuda_threads, resources.num_iters,
         resources.num_iters / resources.cuda_threads, resources.nic_handler);
 
@@ -643,12 +766,25 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
     }
 
     /*
+     * Both peers signal with an RDMA Write with Immediate: the service drains the receive queue of
+     * the QP and adds the value of each immediate to the signal of its id, which the kernel polls
+     */
+    if (cfg->use_write_imm) {
+        status = create_signal_resources(&resources);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to create the signal resources: %d", status);
+            goto destroy_events;
+        }
+    }
+
+    /*
      * A CPU thread progresses the QP for the GPU: it rings the NIC doorbell with the CPU proxy NIC
      * handlers (requested, or resolved from AUTO), or updates the DBR with the software-emulated no
      * DBR mode. It starts after doca_gpu_verbs_get_qp_dev(), which sets up what the thread reads in
-     * that mode.
+     * that mode. The service thread of the write immediate mode already does it for the QP it
+     * monitors.
      */
-    if (resources.qp->qp_gverbs->cpu_proxy) {
+    if (resources.qp->qp_gverbs->cpu_proxy && !cfg->use_write_imm) {
         args.qp_cpu = resources.qp->qp_gverbs;
         args.qp_cpu_companion = NULL;
         args.exit_flag = (uint64_t *)calloc(1, sizeof(uint64_t));
@@ -675,15 +811,9 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
 
     for (int idx = 0; idx < NUM_MSG_SIZE_LAT; idx++) {
         /* Warmup per size*/
-        status = gpunetio_verbs_put_signal_lat(
-            cstream, qp_gpu, 0, resources.num_iters, NUM_QP, resources.cuda_threads,
-            message_size[idx], resources.data_buf[idx], htobe32(resources.data_mr[idx]->lkey),
-            resources.flag_buf[idx], resources.prev_flag_buf[idx],
-            htobe32(resources.prev_flag_mr[idx]->lkey), (uint8_t *)(resources.remote_data_buf[idx]),
-            htobe32(resources.remote_data_mkey[idx]), (uint64_t *)(resources.remote_flag_buf[idx]),
-            htobe32(resources.remote_flag_mkey[idx]), true);
+        status = launch_lat_kernel(&resources, qp_gpu, idx, 0, true);
         if (status != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "Function gpunetio_verbs_put_signal_lat failed: %d", status);
+            DOCA_LOG(LOG_ERR, "Failed to launch the warmup kernel: %d", status);
             goto stop_thread;
         }
 
@@ -695,16 +825,9 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
         }
 
         /* Same signals as the warmup: they keep counting from where it stopped */
-        status = gpunetio_verbs_put_signal_lat(
-            cstream, qp_gpu, resources.num_iters, resources.num_iters, NUM_QP,
-            resources.cuda_threads, message_size[idx], resources.data_buf[idx],
-            htobe32(resources.data_mr[idx]->lkey), resources.flag_buf[idx],
-            resources.prev_flag_buf[idx], htobe32(resources.prev_flag_mr[idx]->lkey),
-            (uint8_t *)(resources.remote_data_buf[idx]), htobe32(resources.remote_data_mkey[idx]),
-            (uint64_t *)(resources.remote_flag_buf[idx]), htobe32(resources.remote_flag_mkey[idx]),
-            true);
+        status = launch_lat_kernel(&resources, qp_gpu, idx, resources.num_iters, true);
         if (status != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "Function gpunetio_verbs_put_signal_lat failed: %d", status);
+            DOCA_LOG(LOG_ERR, "Failed to launch the benchmark kernel: %d", status);
             goto stop_thread;
         }
 
@@ -752,6 +875,13 @@ destroy_events:
 
 client_cleanup:
     oob_verbs_connection_client_close(resources.conn_socket);
+
+    /* No signal can be delivered once the service stops: the slots can be freed */
+    tmp_status = destroy_signal_resources(&resources);
+    if (tmp_status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to destroy the signal resources: %d", tmp_status);
+        if (status == DOCA_SUCCESS) status = tmp_status;
+    }
 
     tmp_status = destroy_local_memory_objects(&resources);
     if (tmp_status != DOCA_SUCCESS) {

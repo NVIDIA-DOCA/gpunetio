@@ -52,8 +52,9 @@ int main(int argc, char **argv) {
     verbs_cfg.cuda_threads = CUDA_THREADS_LAT;
     verbs_cfg.nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO;
     verbs_cfg.enable_data_direct = false;
+    verbs_cfg.use_write_imm = false;
 
-    while ((option = getopt(argc, argv, "c:d:g:i:l:p:z:")) != -1) {
+    while ((option = getopt(argc, argv, "c:d:g:i:l:p:w:z:")) != -1) {
         switch (option) {
             case 'c': {
                 struct in_addr addr;
@@ -117,6 +118,10 @@ int main(int argc, char **argv) {
                 verbs_cfg.nic_handler = (enum doca_gpu_dev_verbs_nic_handler)nic_handler;
                 break;
             }
+            case 'w': {
+                verbs_cfg.use_write_imm = (std::atoi(optarg) != 0);
+                break;
+            }
             case 'z': {
                 verbs_cfg.enable_data_direct = (std::atoi(optarg) != 0);
                 break;
@@ -131,10 +136,19 @@ int main(int argc, char **argv) {
                     << " -l <GID Index (default: 0)>\n"
                     << " -p <NIC handler. 0: AUTO 1: CPU PROXY 2: GPU SM_DB 10: GPU SM no DBR "
                        "17: CPU PROXY free flow (default: 0)>\n"
+                    << " -w <Signal with RDMA Write with Immediate and a signal map. 0: disabled "
+                       "1: enabled (default: 0)>\n"
                     << " -z <Data Direct. 0: disabled 1: enabled (default: 0)>\n"
                     << std::endl;
                 return 1;
         }
+    }
+
+    /* One signal id per message size, in the rank-local signal map of each peer */
+    if (verbs_cfg.use_write_imm && NUM_MSG_SIZE_LAT > DOCA_GPUNETIO_VERBS_SIGNAL_MAX_SIGNALS) {
+        DOCA_LOG(LOG_ERR, "The %d message sizes need more than the %llu signals of a signal map",
+                 NUM_MSG_SIZE_LAT, (unsigned long long)DOCA_GPUNETIO_VERBS_SIGNAL_MAX_SIGNALS);
+        return 1;
     }
 
     status = verbs_validate_config(&verbs_cfg, 1, 0);

@@ -31,8 +31,17 @@
 #include "verbs_common.h"
 #include <inttypes.h>
 #include <signal.h>
+#include <chrono>
+#include <thread>
 
 #define SAMPLE_NAME "gpunetio_verbs_put_signal_bw"
+
+/*
+ * How long the server waits, once the client is done, for its service to deliver the signals of
+ * the RDMA Writes with Immediate. A signal is delivered within microseconds of its message, so the
+ * timeout is only reached when signals are lost
+ */
+#define SIGNAL_DELIVERY_TIMEOUT_MS 10000
 
 #define RESULT_LINE \
     "------------------------------------------------------------------------------------\n"
@@ -46,30 +55,50 @@ int message_size[NUM_MSG_SIZE] = {1,    64,    128,   256,   512,    1024,   204
 volatile bool server_force_quit = false;
 
 /*
+ * Value of each signal once the client is done: its warmup and its timed run each add 1 to the
+ * signal of a CUDA thread per iteration of that thread, and every CUDA thread runs
+ * num_iters / cuda_threads iterations
+ *
+ * @resources [in]: DOCA Verbs resources
+ * @return: the value of each signal
+ */
+static uint64_t expected_signal_value(const struct verbs_resources *resources) {
+    return 2 * (uint64_t)(resources->num_iters / resources->cuda_threads);
+}
+
+/*
  * Server validates data from client at the end of the test
  */
 static doca_error_t server_validate_test(struct verbs_resources *resources) {
     const size_t data_max_size = (size_t)resources->cuda_threads * message_size[NUM_MSG_SIZE - 1];
     const size_t flag_size = (size_t)resources->cuda_threads * sizeof(uint64_t);
+    /* The service delivered every signal before it stopped: each one holds the expected value */
+    const bool check_flags = resources->cfg->use_write_imm;
+    const uint64_t expected_flag = expected_signal_value(resources);
+    const bool gpu_data = resources->cfg->enable_data_direct;
+    /* The signals are the slots of the signal map in write immediate mode: always GPU memory */
+    const bool gpu_flags = resources->cfg->enable_data_direct || resources->cfg->use_write_imm;
+    /* Buffers in GPU memory are validated through a host copy of each */
+    const size_t host_copy_size = gpu_data ? (data_max_size > flag_size ? data_max_size : flag_size)
+                                           : (gpu_flags ? flag_size : 0);
     doca_error_t status = DOCA_SUCCESS;
     uint8_t *host_copy = NULL;
     const uint8_t *data;
     const uint64_t *flag;
     uint64_t tot_flag;
 
-    /* With Data Direct the buffers are in GPU memory: validate a host copy of each */
-    if (resources->cfg->enable_data_direct) {
-        host_copy = (uint8_t *)malloc(data_max_size > flag_size ? data_max_size : flag_size);
+    if (host_copy_size > 0) {
+        host_copy = (uint8_t *)malloc(host_copy_size);
         if (host_copy == NULL) {
             DOCA_LOG(LOG_ERR, "Failed to allocate a host buffer of size = %zu for the validation",
-                     data_max_size > flag_size ? data_max_size : flag_size);
+                     host_copy_size);
             return DOCA_ERROR_NO_MEMORY;
         }
     }
 
     for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
         data = resources->data_buf[idx];
-        if (host_copy != NULL) {
+        if (gpu_data) {
             status = verbs_copy_gpu_to_host(host_copy, data,
                                             (size_t)resources->cuda_threads * message_size[idx]);
             if (status != DOCA_SUCCESS) goto exit;
@@ -90,14 +119,25 @@ static doca_error_t server_validate_test(struct verbs_resources *resources) {
 
     for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
         flag = resources->flag_buf[idx];
-        if (host_copy != NULL) {
+        if (gpu_flags) {
             status = verbs_copy_gpu_to_host(host_copy, flag, flag_size);
             if (status != DOCA_SUCCESS) goto exit;
             flag = (const uint64_t *)host_copy;
         }
 
         tot_flag = 0;
-        for (uint32_t pos = 0; pos < resources->cuda_threads; pos++) tot_flag += flag[pos];
+        for (uint32_t pos = 0; pos < resources->cuda_threads; pos++) {
+            if (check_flags && flag[pos] != expected_flag) {
+                DOCA_LOG(LOG_ERR,
+                         "Validation error: signal %u of message size %d is %" PRIu64
+                         " instead of %" PRIu64,
+                         (uint32_t)idx * resources->cuda_threads + pos, message_size[idx],
+                         flag[pos], expected_flag);
+                status = DOCA_ERROR_BAD_STATE;
+                goto exit;
+            }
+            tot_flag += flag[pos];
+        }
         DOCA_LOG(LOG_INFO, "Flag value for message size %d is %" PRIu64, message_size[idx],
                  tot_flag);
     }
@@ -119,6 +159,8 @@ static void signal_handler(int signum) {
 
 static doca_error_t destroy_local_memory_objects(struct verbs_resources *resources) {
     const bool gpu_buffers = !resources->cfg->is_server || resources->cfg->enable_data_direct;
+    /* The signal map slots the service delivers into are always in GPU memory */
+    const bool gpu_flags = gpu_buffers || resources->cfg->use_write_imm;
     doca_error_t result = DOCA_SUCCESS;
     int ret = 0;
 
@@ -153,7 +195,7 @@ static doca_error_t destroy_local_memory_objects(struct verbs_resources *resourc
 
         /* Only the server allocates the signals */
         if (resources->flag_buf[idx]) {
-            if (!gpu_buffers)
+            if (!gpu_flags)
                 free(resources->flag_buf[idx]);
             else
                 doca_gpu_mem_free(resources->gpu_dev, (void *)resources->flag_buf[idx]);
@@ -186,7 +228,8 @@ static doca_error_t destroy_local_memory_objects(struct verbs_resources *resourc
  * @size [in]: Buffer size
  * @access_flags [in]: Access flags of the memory region
  * @flag_buf [out]: GPU buffer, set as soon as it is allocated so that the caller can free it
- * @flag_mr [out]: Memory region
+ * @flag_mr [out]: Memory region, NULL for a buffer the NIC doesn't access directly, like the
+ * slots of a signal map
  * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
  */
 static doca_error_t create_gpu_flags(struct verbs_resources *resources, size_t size,
@@ -209,11 +252,14 @@ static doca_error_t create_gpu_flags(struct verbs_resources *resources, size_t s
         return DOCA_ERROR_DRIVER;
     }
 
+    if (flag_mr == NULL) return DOCA_SUCCESS;
+
     return verbs_reg_gpu_mr(resources, *flag_buf, size, access_flags, flag_mr);
 }
 
 static doca_error_t create_local_memory_object(struct verbs_resources *resources) {
     const bool data_direct = resources->cfg->enable_data_direct;
+    const bool write_imm = resources->cfg->use_write_imm;
     /* Data Direct registers GPU memory only, so with it the server buffers are in GPU memory too */
     const bool gpu_buffers = !resources->cfg->is_server || data_direct;
     const int data_access_flags =
@@ -249,19 +295,23 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
                 goto exit_error;
             }
 
-            resources->flag_buf[idx] = (uint64_t *)calloc(size_flag, 1);
-            if (resources->flag_buf[idx] == NULL) {
-                status = DOCA_ERROR_NO_MEMORY;
-                DOCA_LOG(LOG_ERR, "Failed to allocate CPU memory buffer of size = %zd", size_flag);
-                goto exit_error;
-            }
+            /* The signals of the write immediate mode are allocated in GPU memory below */
+            if (!write_imm) {
+                resources->flag_buf[idx] = (uint64_t *)calloc(size_flag, 1);
+                if (resources->flag_buf[idx] == NULL) {
+                    status = DOCA_ERROR_NO_MEMORY;
+                    DOCA_LOG(LOG_ERR, "Failed to allocate CPU memory buffer of size = %zd",
+                             size_flag);
+                    goto exit_error;
+                }
 
-            resources->flag_mr[idx] = ibv_reg_mr(resources->verbs_pd, resources->flag_buf[idx],
-                                                 size_flag, flag_access_flags);
-            if (resources->flag_mr[idx] == NULL) {
-                status = DOCA_ERROR_DRIVER;
-                DOCA_LOG(LOG_ERR, "Failed to create flag mr: %s", strerror(errno));
-                goto exit_error;
+                resources->flag_mr[idx] = ibv_reg_mr(resources->verbs_pd, resources->flag_buf[idx],
+                                                     size_flag, flag_access_flags);
+                if (resources->flag_mr[idx] == NULL) {
+                    status = DOCA_ERROR_DRIVER;
+                    DOCA_LOG(LOG_ERR, "Failed to create flag mr: %s", strerror(errno));
+                    goto exit_error;
+                }
             }
         } else {
             status = doca_gpu_mem_alloc(resources->gpu_dev, size_data, host_page_size,
@@ -286,14 +336,30 @@ static doca_error_t create_local_memory_object(struct verbs_resources *resources
                                       data_access_flags, &resources->data_mr[idx]);
             if (status != DOCA_SUCCESS) goto exit_error;
 
-            /* The server signals, or the client buffer of the values its fetch and adds return */
-            if (resources->cfg->is_server)
-                status = create_gpu_flags(resources, size_flag, flag_access_flags,
-                                          &resources->flag_buf[idx], &resources->flag_mr[idx]);
-            else
-                status =
-                    create_gpu_flags(resources, size_flag, IBV_ACCESS_LOCAL_WRITE,
-                                     &resources->prev_flag_buf[idx], &resources->prev_flag_mr[idx]);
+            /*
+             * The server signals, or the client buffer of the values its fetch and adds return.
+             * The write immediate mode has neither: the signal map of the server resolves the
+             * signal id of each immediate, and nothing is returned to the client
+             */
+            if (!write_imm) {
+                if (resources->cfg->is_server)
+                    status = create_gpu_flags(resources, size_flag, flag_access_flags,
+                                              &resources->flag_buf[idx], &resources->flag_mr[idx]);
+                else
+                    status = create_gpu_flags(resources, size_flag, IBV_ACCESS_LOCAL_WRITE,
+                                              &resources->prev_flag_buf[idx],
+                                              &resources->prev_flag_mr[idx]);
+                if (status != DOCA_SUCCESS) goto exit_error;
+            }
+        }
+
+        /*
+         * Slots of the signal map: GPU memory even when the data buffers are not, as the map
+         * delivers into GPU memory, and with no memory region, as the NIC never writes them
+         * directly
+         */
+        if (write_imm && resources->cfg->is_server) {
+            status = create_gpu_flags(resources, size_flag, 0, &resources->flag_buf[idx], NULL);
             if (status != DOCA_SUCCESS) goto exit_error;
         }
     }
@@ -330,6 +396,9 @@ static doca_error_t exchange_params_with_remote_peer(struct verbs_resources *res
                 return DOCA_ERROR_CONNECTION_ABORTED;
             }
 
+            /* The client signals a signal id of the server map, not an address */
+            if (resources->cfg->use_write_imm) continue;
+
             local_addr = (uint64_t)resources->flag_buf[idx];
             if (verbs_oob_send(resources->conn_socket, &local_addr, sizeof(uint64_t)) != 0) {
                 DOCA_LOG(LOG_ERR, "Failed to send local flag address");
@@ -356,6 +425,8 @@ static doca_error_t exchange_params_with_remote_peer(struct verbs_resources *res
                 DOCA_LOG(LOG_ERR, "Failed to receive remote MKEY, err = %d", errno);
                 return DOCA_ERROR_CONNECTION_ABORTED;
             }
+
+            if (resources->cfg->use_write_imm) continue;
 
             if (verbs_oob_recv(resources->conn_socket, &resources->remote_flag_buf[idx],
                                sizeof(uint64_t)) != 0) {
@@ -408,6 +479,186 @@ static doca_error_t exchange_params_with_remote_peer(struct verbs_resources *res
     return DOCA_SUCCESS;
 }
 
+/* Message sizes whose signals are registered in the map, so that only those are unregistered */
+static int signals_registered = 0;
+
+/*
+ * Create the signal map of the server and register its signals: one per CUDA thread and message
+ * size, so that the client signals the id (message size index * CUDA threads) + CUDA thread index
+ *
+ * @resources [in]: DOCA Verbs resources, with the signals already allocated in GPU memory
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t create_signal_resources(struct verbs_resources *resources) {
+    const uint32_t num_signals = resources->cuda_threads;
+    doca_error_t status;
+
+    status = verbs_signal_map_create(resources);
+    if (status != DOCA_SUCCESS) return status;
+
+    for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
+        const uint32_t min_sig_id = (uint32_t)idx * num_signals;
+
+        /* The signals of a message size are consecutive slots of one allocation: one call each */
+        status = doca_gpu_verbs_signal_register_range(resources->signal_map, min_sig_id,
+                                                      min_sig_id + num_signals - 1,
+                                                      resources->flag_buf[idx]);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to register the signals %u-%u of message size %d: %d",
+                     min_sig_id, min_sig_id + num_signals - 1, message_size[idx], status);
+            return status;
+        }
+
+        signals_registered++;
+    }
+
+    /* The map must not be registered into while the service delivers signals into it */
+    return verbs_signal_service_start(resources);
+}
+
+/*
+ * Wait until the service has delivered every signal of the client. The client reports that it is
+ * done once its RDMA Writes with Immediate have completed, which only means the NIC of the server
+ * acknowledged them: the service polls their receive completions on its own schedule, so it can
+ * still be adding their values, and stopping it before then would leave signals short.
+ *
+ * The signals are registered in the signal map, so the host can't copy them: a kernel counts the
+ * ones still below their final value, while the service keeps delivering.
+ *
+ * @resources [in]: DOCA Verbs resources, with the service started
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t wait_signal_delivery(struct verbs_resources *resources) {
+    const uint64_t expected = expected_signal_value(resources);
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(SIGNAL_DELIVERY_TIMEOUT_MS);
+    doca_error_t status = DOCA_SUCCESS;
+    uint32_t *num_short_gpu = NULL;
+    uint32_t num_short = 0;
+    cudaError_t cuda_ret;
+
+    cuda_ret = cudaMalloc((void **)&num_short_gpu, sizeof(uint32_t));
+    if (cuda_ret != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Failed to allocate the count of the signals not delivered yet: %s",
+                 cudaGetErrorString(cuda_ret));
+        return DOCA_ERROR_NO_MEMORY;
+    }
+
+    DOCA_LOG(LOG_INFO, "Waiting for the delivery of every signal of the client");
+    while (true) {
+        if (server_force_quit) {
+            DOCA_LOG(LOG_ERR, "Stopped while waiting for the delivery of the signals");
+            status = DOCA_ERROR_SHUTDOWN;
+            goto exit;
+        }
+
+        /*
+         * The server has no stream of its own: the default stream orders the memset, the kernels
+         * and the copy
+         */
+        cuda_ret = cudaMemset(num_short_gpu, 0, sizeof(uint32_t));
+        if (cuda_ret != cudaSuccess) {
+            DOCA_LOG(LOG_ERR, "Failed to reset the count of the signals not delivered yet: %s",
+                     cudaGetErrorString(cuda_ret));
+            status = DOCA_ERROR_DRIVER;
+            goto exit;
+        }
+
+        for (int idx = 0; idx < NUM_MSG_SIZE; idx++) {
+            status = gpunetio_verbs_count_short_signals(
+                0, resources->flag_buf[idx], resources->cuda_threads, expected, num_short_gpu);
+            if (status != DOCA_SUCCESS) goto exit;
+        }
+
+        cuda_ret = cudaMemcpy(&num_short, num_short_gpu, sizeof(uint32_t), cudaMemcpyDeviceToHost);
+        if (cuda_ret != cudaSuccess) {
+            DOCA_LOG(LOG_ERR, "Failed to read the count of the signals not delivered yet: %s",
+                     cudaGetErrorString(cuda_ret));
+            status = DOCA_ERROR_DRIVER;
+            goto exit;
+        }
+
+        if (num_short == 0) break;
+
+        if (std::chrono::steady_clock::now() >= deadline) {
+            DOCA_LOG(
+                LOG_ERR,
+                "%u of the %u signals are still below %" PRIu64
+                " after %d ms: the service dropped signals or stopped polling the receive queue",
+                num_short, NUM_MSG_SIZE * resources->cuda_threads, expected,
+                SIGNAL_DELIVERY_TIMEOUT_MS);
+            status = DOCA_ERROR_TIME_OUT;
+            goto exit;
+        }
+
+        /* Leave the CPU to the service thread */
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+exit:
+    cudaFree(num_short_gpu);
+    return status;
+}
+
+/*
+ * Stop the delivery of the signals and release the signal map. The host can copy the signals once
+ * this returns, as they are no longer registered. They hold every value of the client only if
+ * wait_signal_delivery() succeeded before
+ *
+ * @resources [in]: DOCA Verbs resources
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t destroy_signal_resources(struct verbs_resources *resources) {
+    const uint32_t num_signals = resources->cuda_threads;
+    doca_error_t result = DOCA_SUCCESS, status;
+
+    status = verbs_signal_service_stop(resources);
+    if (status != DOCA_SUCCESS) result = status;
+
+    while (signals_registered > 0) {
+        const uint32_t min_sig_id = (uint32_t)(--signals_registered) * num_signals;
+
+        status = doca_gpu_verbs_signal_unregister_range(resources->signal_map, min_sig_id,
+                                                        min_sig_id + num_signals - 1);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to unregister the signals %u-%u: %d", min_sig_id,
+                     min_sig_id + num_signals - 1, status);
+            if (result == DOCA_SUCCESS) result = status;
+        }
+    }
+
+    status = verbs_signal_map_destroy(resources);
+    if (status != DOCA_SUCCESS && result == DOCA_SUCCESS) result = status;
+
+    return result;
+}
+
+/*
+ * Launch the benchmark kernel of the mode in use, for one message size
+ *
+ * @resources [in]: DOCA Verbs resources
+ * @qp_gpu [in]: Verbs GPU object
+ * @idx [in]: Message size index
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t launch_bw_kernel(struct verbs_resources *resources,
+                                     struct doca_gpu_dev_verbs_qp *qp_gpu, int idx) {
+    if (resources->cfg->use_write_imm)
+        return gpunetio_verbs_put_immediate_bw(
+            cstream, qp_gpu, resources->num_iters, VERBS_CUDA_BLOCK,
+            resources->cuda_threads / VERBS_CUDA_BLOCK, message_size[idx], resources->data_buf[idx],
+            htobe32(resources->data_mr[idx]->lkey), (uint8_t *)(resources->remote_data_buf[idx]),
+            htobe32(resources->remote_data_mkey[idx]), (uint32_t)idx * resources->cuda_threads);
+
+    return gpunetio_verbs_put_signal_bw(
+        cstream, qp_gpu, resources->num_iters, VERBS_CUDA_BLOCK,
+        resources->cuda_threads / VERBS_CUDA_BLOCK, message_size[idx], resources->data_buf[idx],
+        htobe32(resources->data_mr[idx]->lkey), resources->prev_flag_buf[idx],
+        htobe32(resources->prev_flag_mr[idx]->lkey), (uint8_t *)(resources->remote_data_buf[idx]),
+        htobe32(resources->remote_data_mkey[idx]), (uint64_t *)(resources->remote_flag_buf[idx]),
+        htobe32(resources->remote_flag_mkey[idx]), resources->scope);
+}
+
 doca_error_t verbs_server(struct verbs_config *cfg) {
     doca_error_t status = DOCA_SUCCESS, tmp_status = DOCA_SUCCESS;
     struct verbs_resources resources = {0};
@@ -451,6 +702,18 @@ doca_error_t verbs_server(struct verbs_config *cfg) {
         goto server_cleanup;
     }
 
+    /*
+     * The client signals with an RDMA Write with Immediate: the service drains the receive queue
+     * of the QP and adds the value of each immediate to the signal of its id
+     */
+    if (cfg->use_write_imm) {
+        status = create_signal_resources(&resources);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to create the signal resources: %d", status);
+            goto server_cleanup;
+        }
+    }
+
     /* Gracefully terminate app if ctrlc */
     server_force_quit = false;
     signal(SIGINT, signal_handler);
@@ -464,10 +727,29 @@ doca_error_t verbs_server(struct verbs_config *cfg) {
     status = verbs_oob_wait_done(resources.conn_socket, &server_force_quit);
     if (status != DOCA_SUCCESS) goto server_cleanup;
 
+    /* The service may still be delivering the last signals of the client: keep it running */
+    if (cfg->use_write_imm) {
+        status = wait_signal_delivery(&resources);
+        if (status != DOCA_SUCCESS) goto server_cleanup;
+    }
+
+    /* Every signal has been delivered: unregister them, so that the host can copy them */
+    status = destroy_signal_resources(&resources);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to destroy the signal resources: %d", status);
+        goto server_cleanup;
+    }
+
     status = server_validate_test(&resources);
     if (status != DOCA_SUCCESS) DOCA_LOG(LOG_ERR, "Server data validation failed");
 
 server_cleanup:
+    tmp_status = destroy_signal_resources(&resources);
+    if (tmp_status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to destroy the signal resources: %d", tmp_status);
+        if (status == DOCA_SUCCESS) status = tmp_status;
+    }
+
     tmp_status = destroy_local_memory_objects(&resources);
     if (tmp_status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to destroy local memory resources: %d", tmp_status);
@@ -560,13 +842,15 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
         goto destroy_events;
     }
 
-    DOCA_LOG(LOG_INFO,
-             "Launching gpunetio_verbs_put_signal_bw kernel with %d CUDA Blocks, %d CUDA threads "
-             "each, %d total number of iterations, %d iterations per cuda thread, %d nic handler, "
-             "%s scope",
-             VERBS_CUDA_BLOCK, resources.cuda_threads / VERBS_CUDA_BLOCK, resources.num_iters,
-             resources.num_iters / resources.cuda_threads, resources.nic_handler,
-             (resources.scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD) ? "THREAD" : "WARP");
+    DOCA_LOG(
+        LOG_INFO,
+        "Launching %s kernel with %d CUDA Blocks, %d CUDA threads "
+        "each, %d total number of iterations, %d iterations per cuda thread, %d nic handler, "
+        "%s scope",
+        cfg->use_write_imm ? "gpunetio_verbs_put_immediate_bw" : "gpunetio_verbs_put_signal_bw",
+        VERBS_CUDA_BLOCK, resources.cuda_threads / VERBS_CUDA_BLOCK, resources.num_iters,
+        resources.num_iters / resources.cuda_threads, resources.nic_handler,
+        (resources.scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD) ? "THREAD" : "WARP");
 
     status = doca_gpu_verbs_get_qp_dev(resources.qp->qp_gverbs, &qp_gpu);
     if (status != DOCA_SUCCESS) {
@@ -606,15 +890,9 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
          * Warmup per size. Each size has its own remote signals: the warmup increments them from 0
          * to num_iters / cuda_threads, the timed run from there to twice that.
          */
-        status = gpunetio_verbs_put_signal_bw(
-            cstream, qp_gpu, resources.num_iters, VERBS_CUDA_BLOCK,
-            resources.cuda_threads / VERBS_CUDA_BLOCK, message_size[idx], resources.data_buf[idx],
-            htobe32(resources.data_mr[idx]->lkey), resources.prev_flag_buf[idx],
-            htobe32(resources.prev_flag_mr[idx]->lkey), (uint8_t *)(resources.remote_data_buf[idx]),
-            htobe32(resources.remote_data_mkey[idx]), (uint64_t *)(resources.remote_flag_buf[idx]),
-            htobe32(resources.remote_flag_mkey[idx]), resources.scope);
+        status = launch_bw_kernel(&resources, qp_gpu, idx);
         if (status != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "Function gpunetio_verbs_put_signal_bw failed: %d", status);
+            DOCA_LOG(LOG_ERR, "Failed to launch the warmup kernel: %d", status);
             goto stop_thread;
         }
 
@@ -632,15 +910,9 @@ doca_error_t verbs_client(struct verbs_config *cfg) {
             goto stop_thread;
         }
 
-        status = gpunetio_verbs_put_signal_bw(
-            cstream, qp_gpu, resources.num_iters, VERBS_CUDA_BLOCK,
-            resources.cuda_threads / VERBS_CUDA_BLOCK, message_size[idx], resources.data_buf[idx],
-            htobe32(resources.data_mr[idx]->lkey), resources.prev_flag_buf[idx],
-            htobe32(resources.prev_flag_mr[idx]->lkey), (uint8_t *)(resources.remote_data_buf[idx]),
-            htobe32(resources.remote_data_mkey[idx]), (uint64_t *)(resources.remote_flag_buf[idx]),
-            htobe32(resources.remote_flag_mkey[idx]), resources.scope);
+        status = launch_bw_kernel(&resources, qp_gpu, idx);
         if (status != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "Function gpunetio_verbs_put_signal_bw failed: %d", status);
+            DOCA_LOG(LOG_ERR, "Failed to launch the benchmark kernel: %d", status);
             goto stop_thread;
         }
 

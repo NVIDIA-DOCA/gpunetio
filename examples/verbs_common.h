@@ -53,6 +53,7 @@
 #include <doca_verbs.h>
 #include <doca_gpunetio.h>
 #include <doca_gpunetio_high_level.h>
+#include <doca_gpunetio_signal.h>
 #include <doca_gpunetio_verbs_def.h>
 #include <doca_gpunetio_config.h>
 
@@ -96,6 +97,8 @@ struct verbs_config {
     enum doca_gpu_verbs_send_dbr_mode_ext
         send_dbr_mode_ext;   /* Enable send dbr mode ext to avoid DBREC update on sending */
     bool enable_data_direct; /* Register the GPU buffers with Data Direct */
+    bool use_write_imm;      /* Signal with an RDMA Write with Immediate delivered into a signal
+                                map, instead of an RDMA Atomic Fetch and Add */
 };
 
 struct verbs_resources {
@@ -149,6 +152,10 @@ struct verbs_resources {
     bool enable_umem_cpu;     /* Enable creation of QP/CQ UMEM on CPU pinned memory */
     bool enable_comp_channel; /* Enable creation of CQ comp channel for error checking */
     doca_verbs_comp_channel_t *comp_channel;
+
+    /* write immediate mode: rank-local signal map and the service that delivers into it */
+    struct doca_gpu_verbs_signal_map *signal_map;
+    doca_gpu_verbs_service_t signal_service;
 };
 
 struct cpu_proxy_args {
@@ -162,7 +169,8 @@ struct cpu_proxy_args {
 struct verbs_oob_config {
     char sample_name[64]; /* Sample binary name, catches a client connected to a different sample */
     uint32_t num_iters;   /* -i */
-    uint32_t cuda_threads; /* CUDA threads of the sample kernel */
+    uint32_t cuda_threads;  /* CUDA threads of the sample kernel */
+    uint32_t use_write_imm; /* -w, both peers must agree: it changes the QP and the signals */
 };
 
 /*
@@ -329,6 +337,42 @@ doca_error_t verbs_reg_gpu_mr(struct verbs_resources *resources, void *buf, size
                               int access_flags, struct ibv_mr **mr);
 
 /*
+ * Create the rank-local signal map the RDMA Write with Immediate signals are delivered into.
+ * Register the signals into it before starting the service with verbs_signal_service_start()
+ *
+ * @resources [in/out]: DOCA Verbs resources, with the created map
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+doca_error_t verbs_signal_map_create(struct verbs_resources *resources);
+
+/*
+ * Destroy the signal map. The service must have been stopped and every signal unregistered
+ *
+ * @resources [in/out]: DOCA Verbs resources with the map, cleared on success
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+doca_error_t verbs_signal_map_destroy(struct verbs_resources *resources);
+
+/*
+ * Start the service that drains the QP receive queue: it adds the signal value of each immediate
+ * received to its slot in the signal map and returns the receive credits to the NIC. The service
+ * thread also progresses the QP for the CPU proxy NIC handlers, so the sample must not run its own
+ * CPU proxy thread on a QP the service monitors
+ *
+ * @resources [in/out]: DOCA Verbs resources with the signal map and the connected QP
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+doca_error_t verbs_signal_service_start(struct verbs_resources *resources);
+
+/*
+ * Stop the service and its delivery into the signal map. Harmless if the service wasn't started
+ *
+ * @resources [in/out]: DOCA Verbs resources with the service, cleared on success
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+doca_error_t verbs_signal_service_stop(struct verbs_resources *resources);
+
+/*
  * Copy to host memory a GPU buffer the NIC wrote into, once the NIC writes into GPU memory have
  * been flushed
  *
@@ -473,6 +517,50 @@ doca_error_t gpunetio_verbs_put_signal_bw(
     uint64_t *dst_flag, uint32_t dst_flag_mkey, enum doca_gpu_dev_verbs_exec_scope scope);
 
 /*
+ * Launch a CUDA kernel to measure One-Sided Put with Signal Shared QP bandwidth, signalling with
+ * an RDMA Write with Immediate. Each CUDA thread writes its own chunk of the destination buffer
+ * with a single operation whose immediate carries its own signal id, and the signal map of the
+ * remote peer adds 1 to the slot of that id. There is no warp scope: the put with immediate is
+ * posted per CUDA thread
+ *
+ * @stream [in]: CUDA Stream to launch the kernel
+ * @qp [in]: Verbs GPU object
+ * @num_iters [in]: Total number of iterations
+ * @cuda_blocks [in]: Number of CUDA blocks to launch the kernel
+ * @cuda_threads [in]: Number of CUDA threads to launch the kernel
+ * @data_size [in]: Data buffer size (number of bytes)
+ * @src_buf [in]: Source GPU data buffer address
+ * @src_buf_mkey [in]: Source GPU data buffer memory key
+ * @dst_buf [in]: Destination data buffer address
+ * @dst_buf_mkey [in]: Destination data buffer memory key
+ * @base_sig_id [in]: Signal id of CUDA thread 0 in the remote signal map, CUDA thread i signals
+ * base_sig_id + i
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+doca_error_t gpunetio_verbs_put_immediate_bw(cudaStream_t stream, struct doca_gpu_dev_verbs_qp *qp,
+                                             uint32_t num_iters, uint32_t cuda_blocks,
+                                             uint32_t cuda_threads, uint32_t data_size,
+                                             uint8_t *src_buf, uint32_t src_buf_mkey,
+                                             uint8_t *dst_buf, uint32_t dst_buf_mkey,
+                                             uint32_t base_sig_id);
+
+/*
+ * Launch a CUDA kernel that counts the signals still below a value. The signals can be the slots of
+ * a signal map, which the host must not copy while they are registered
+ *
+ * @stream [in]: CUDA Stream to launch the kernel
+ * @signals [in]: Signals in GPU memory
+ * @num_signals [in]: Number of signals
+ * @expected [in]: Value each signal must reach
+ * @num_short [in/out]: Counter in GPU memory, which the kernel increments once per signal below
+ * expected
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+doca_error_t gpunetio_verbs_count_short_signals(cudaStream_t stream, const uint64_t *signals,
+                                                uint32_t num_signals, uint64_t expected,
+                                                uint32_t *num_short);
+
+/*
  * Launch a CUDA kernel to measure One-Sided Put with Signal latency
  *
  * @stream [in]: CUDA Stream to launch the kernel
@@ -503,6 +591,39 @@ doca_error_t gpunetio_verbs_put_signal_lat(
     uint32_t src_buf_mkey, uint64_t *local_flag, uint64_t *prev_flag_buf,
     uint32_t prev_flag_buf_mkey, uint8_t *dst_buf, uint32_t dst_buf_mkey, uint64_t *dst_flag,
     uint32_t dst_flag_mkey, bool is_client);
+
+/*
+ * Launch a CUDA kernel to measure One-Sided Put with Signal latency, signalling with an RDMA Write
+ * with Immediate. Each message is a single operation whose immediate carries the signal id of the
+ * remote peer, and the signal map of that peer adds 1 to the slot of the id. Each side polls its
+ * own slot, which its signal map delivers into, to know when the message has arrived
+ *
+ * @stream [in]: CUDA Stream to launch the kernel
+ * @qp [in]: Verbs GPU object
+ * @start_iters [in]: Number of iterations already run on the same signals by previous launches
+ * (e.g. warmup)
+ * @num_iters [in]: Total number of iterations
+ * @cuda_blocks [in]: Number of CUDA blocks to launch the kernel. Must be 1, DOCA_ERROR_BAD_STATE
+ * otherwise
+ * @cuda_threads [in]: Number of CUDA threads to launch the kernel. Must be 1,
+ * DOCA_ERROR_BAD_STATE otherwise
+ * @data_size [in]: Data buffer size (number of bytes)
+ * @src_buf [in]: Source GPU data buffer address
+ * @src_buf_mkey [in]: Source GPU data buffer memory key
+ * @local_flag [in]: Slot of the local signal map the remote peer signals, to poll
+ * @dst_buf [in]: Destination GPU data buffer address
+ * @dst_buf_mkey [in]: Destination GPU data buffer memory key
+ * @remote_sig_id [in]: Signal id to signal in the signal map of the remote peer
+ * @is_client [in]: This kernel should act like the client (true) or server (false)
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+doca_error_t gpunetio_verbs_put_immediate_lat(cudaStream_t stream, struct doca_gpu_dev_verbs_qp *qp,
+                                              uint32_t start_iters, uint32_t num_iters,
+                                              uint32_t cuda_blocks, uint32_t cuda_threads,
+                                              uint32_t data_size, uint8_t *src_buf,
+                                              uint32_t src_buf_mkey, uint64_t *local_flag,
+                                              uint8_t *dst_buf, uint32_t dst_buf_mkey,
+                                              uint32_t remote_sig_id, bool is_client);
 
 #if __cplusplus
 }
