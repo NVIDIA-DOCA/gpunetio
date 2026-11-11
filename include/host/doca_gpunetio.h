@@ -140,6 +140,9 @@ struct doca_gpu_verbs_qp {
     doca_error_t rq_fatal_status;           // Last error code seen on the RQ.
     bool monitored_by;  // Whether the QP is monitored by a service.
     uint64_t rq_dbr_pi_shadow;  // rq_dbr_pi last written to rq_dbrec_cpu.
+
+    /* SDK mode: what the export to the DOCA GPUNetIO SDK owns, NULL until the export. */
+    void *sdk_qp;
 };
 
 /**
@@ -287,6 +290,8 @@ doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, struct doca_verbs_qp_
  * DOCA_SUCCESS - in case of success.
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
+ * - Any error of doca_gpu_verbs_unexport_sdk_qp() - if the QP has a DOCA GPUNetIO SDK handler that
+ *   could not be released. Nothing is destroyed, and the call can be retried.
  */
 doca_error_t doca_gpu_verbs_unexport_qp(doca_gpu_t *gpu_dev, struct doca_gpu_verbs_qp *qp);
 
@@ -344,6 +349,81 @@ static inline doca_error_t doca_priv_gpu_verbs_get_qp_dev(struct doca_gpu_verbs_
 
 /* Preserve the addressable symbol while forwarding normal calls with the consumer's version. */
 #define doca_gpu_verbs_get_qp_dev(qp, qp_gpu) doca_priv_gpu_verbs_get_qp_dev(qp, qp_gpu)
+
+/**
+ * Export a Verbs QP of this library to the DOCA GPUNetIO SDK.
+ *
+ * Only available in DOCA SDK mode, when DOCA_SDK_LIB_PATH is set and doca_gpu_create() opened the
+ * GPU through the SDK. The QP keeps belonging to this library: the call reads the queue, doorbell
+ * and completion queue addresses out of it and hands them to doca_gpu_verbs_bridge_export_qp() of
+ * the SDK, which builds its own GPU handler around the same queues.
+ *
+ * The QP must have a receive queue, created with rq_nwqe > 0, because the SDK export takes the
+ * receive queue addresses as mandatory arguments. The GPU handler of this library never touches
+ * the receive side, so the parts of it this library keeps in host memory, like the receive CQ of
+ * a high-level QP, are registered with CUDA for the SDK device code to reach them. The DOCA SDK
+ * in use must provide doca_gpu_verbs_bridge_export_qp(), doca_gpu_verbs_get_qp_dev() and
+ * doca_gpu_verbs_unexport_qp(): no SDK handler is built otherwise.
+ *
+ * The returned handler is a GPU pointer to a struct doca_gpu_dev_verbs_qp of the DOCA GPUNetIO
+ * SDK, whose layout is not the one of this library: device code must cast it with the SDK headers
+ * it was compiled against, and must never pass it to the device functions of this library. The
+ * handler is cached in the QP, so a second call returns the same pointer.
+ *
+ * The SDK handler keeps its own producer and consumer indexes, so the two handlers must not drive
+ * the same queues at the same time. With a CPU proxy NIC handler, the doorbell of the SDK handler
+ * is rung by the DOCA SDK progress functions, which this library does not call.
+ *
+ * The SDK describes a completion queue without a type: a QP whose CQEs live in host memory can't
+ * be exported, and a QP with collapsed CQEs needs SDK device code compiled for collapsed CQEs.
+ *
+ * @param [in] qp
+ * DOCA GPUNetIO Verbs QP object to export.
+ * @param [out] qp_sdk_gpu
+ * Opaque handler: GPU pointer to the struct doca_gpu_dev_verbs_qp of the DOCA GPUNetIO SDK.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
+ * - DOCA_ERROR_NOT_SUPPORTED - if the library doesn't run in DOCA SDK mode, if the DOCA SDK in use
+ *   lacks one of the entry points above, if the QP has no receive queue, or if the NIC handler of
+ *   the QP has no counterpart in the SDK.
+ * - DOCA_ERROR_DRIVER - if the receive queue memory could not be mapped for the GPU.
+ * - DOCA_ERROR_BAD_STATE - if an earlier export of the QP failed half-way and could not be undone:
+ *   the QP keeps it until doca_gpu_verbs_unexport_sdk_qp() succeeds.
+ * - DOCA_ERROR_UNEXPECTED - if the DOCA SDK returned an error.
+ */
+doca_error_t doca_gpu_verbs_export_sdk_qp(struct doca_gpu_verbs_qp *qp, void **qp_sdk_gpu);
+
+/**
+ * Destroy the DOCA GPUNetIO SDK handler of a QP exported with doca_gpu_verbs_export_sdk_qp().
+ *
+ * Frees the GPU handler the SDK built and the SDK objects behind it, so the pointer returned by
+ * the export becomes invalid and device code must stop using it first. The queues keep belonging
+ * to this library and are left untouched: the QP goes on working through its own handler.
+ *
+ * Doing nothing and returning DOCA_SUCCESS when the QP has no SDK handler, this call is safe to
+ * make on any QP. doca_gpu_verbs_unexport_qp() and the high-level destroy functions make it as
+ * well, so that destroying a QP never leaks its SDK handler. When the release fails, the QP keeps
+ * what is left of its SDK handler and the call can be retried: doca_gpu_verbs_unexport_qp() and
+ * the high-level destroy functions then return the error and destroy nothing.
+ *
+ * The SDK releases its own mapping of the doorbell register here, and this library the host
+ * memory it registered with CUDA for the export. The mapping this library made of the doorbell
+ * register for its own handler is counted separately and survives, so the QP keeps ringing it.
+ *
+ * @param [in] qp
+ * DOCA GPUNetIO Verbs QP object whose SDK handler is destroyed.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success, or if the QP has no SDK handler.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
+ * - DOCA_ERROR_UNEXPECTED - if the DOCA SDK returned an error.
+ * - DOCA_ERROR_DRIVER - if the host memory registered for the export could not be unregistered.
+ */
+doca_error_t doca_gpu_verbs_unexport_sdk_qp(struct doca_gpu_verbs_qp *qp);
 
 /**
  * Return a DMABuf file descriptor from a GPU memory address if the GPU device and CUDA installation

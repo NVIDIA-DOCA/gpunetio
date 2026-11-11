@@ -38,6 +38,11 @@
 #include "doca_sdk_wrapper.h"
 #include "doca_gpunetio_sdk_wrapper.h"
 
+/* A GNU extension: a C library without it keeps the default symbol resolution order */
+#ifndef RTLD_DEEPBIND
+#define RTLD_DEEPBIND 0
+#endif
+
 /*
  * Enable DOCA SDK log errors on stderr.
  * Disabled by default to avoid extra-prints on screen.
@@ -59,6 +64,15 @@ typedef doca_error_t (*doca_gpu_dmabuf_fd_t)(void *gpu_dev, void *memptr_gpu, si
                                              int *dmabuf_fd);
 typedef doca_error_t (*doca_gpu_verbs_req_notify_cq_t)(void *gpu_dev, void *verbs_cq);
 
+typedef doca_error_t (*doca_gpu_verbs_bridge_export_qp_t)(
+    void *gpu_dev, uint32_t sq_qpn, void *sq_wqe_addr, uint16_t sq_wqe_num, uint32_t *sq_dbrec,
+    uint64_t *sq_db, size_t uar_size, uint32_t sq_cqn, void *sq_cqe_addr, uint32_t sq_cqe_num,
+    uint32_t *sq_cq_dbrec, uint32_t rq_qpn, void *rq_wqe_addr, uint16_t rq_wqe_num,
+    uint32_t *rq_dbrec, uint32_t rcv_wqe_size, uint32_t rq_cqn, void *rq_cqe_addr,
+    uint32_t rq_cqe_num, uint32_t *rq_cq_dbrec, uint32_t nic_handler, void **qp_sdk);
+typedef doca_error_t (*doca_gpu_verbs_unexport_qp_t)(void *gpu_dev, void *qp_sdk);
+typedef doca_error_t (*doca_gpu_verbs_get_qp_dev_t)(void *qp_sdk, void **qp_gpu);
+
 typedef doca_error_t (*doca_gpu_cap_is_gpu_mem_umem_supported_t)(void *gpu_dev, void *net_dev);
 typedef doca_error_t (*doca_gpu_cap_is_host_mem_umem_supported_t)(void *gpu_dev, void *net_dev);
 typedef doca_error_t (*doca_gpu_cap_is_nic_handler_gpu_sm_db_supported_t)(void *gpu_dev,
@@ -76,6 +90,9 @@ static doca_gpu_mem_alloc_t p_doca_gpu_mem_alloc = nullptr;
 static doca_gpu_mem_free_t p_doca_gpu_mem_free = nullptr;
 static doca_gpu_dmabuf_fd_t p_doca_gpu_dmabuf_fd = nullptr;
 static doca_gpu_verbs_req_notify_cq_t p_doca_gpu_verbs_req_notify_cq = nullptr;
+static doca_gpu_verbs_bridge_export_qp_t p_doca_gpu_verbs_bridge_export_qp = nullptr;
+static doca_gpu_verbs_unexport_qp_t p_doca_gpu_verbs_unexport_qp = nullptr;
+static doca_gpu_verbs_get_qp_dev_t p_doca_gpu_verbs_get_qp_dev = nullptr;
 static doca_gpu_cap_is_gpu_mem_umem_supported_t p_doca_gpu_cap_is_gpu_mem_umem_supported = nullptr;
 static doca_gpu_cap_is_host_mem_umem_supported_t p_doca_gpu_cap_is_host_mem_umem_supported =
     nullptr;
@@ -163,8 +180,16 @@ static void doca_gpunetio_sdk_wrapper_init(int *ret) {
         goto exit_error;
     }
 
-    gpunetio_handle = dlopen(libgpunetio_versioned_path, RTLD_NOW | RTLD_LOCAL);
-    if (!gpunetio_handle) gpunetio_handle = dlopen(libgpunetio_path, RTLD_NOW | RTLD_LOCAL);
+    /*
+     * RTLD_DEEPBIND makes the DOCA SDK resolve the DOCA API symbols it calls internally against
+     * itself first. This library defines the same names, and it comes first in the global symbol
+     * scope, so without it an internal SDK call such as the doca_gpu_mem_alloc() of
+     * doca_gpu_verbs_bridge_export_qp() lands in this library and receives an SDK object where it
+     * expects one of its own.
+     */
+    gpunetio_handle = dlopen(libgpunetio_versioned_path, RTLD_NOW | RTLD_LOCAL | RTLD_DEEPBIND);
+    if (!gpunetio_handle)
+        gpunetio_handle = dlopen(libgpunetio_path, RTLD_NOW | RTLD_LOCAL | RTLD_DEEPBIND);
     if (!gpunetio_handle) {
         DOCA_LOG(LOG_ERR,
                  "Failed to load DOCA SDK library; tried %s then %s "
@@ -192,6 +217,13 @@ static void doca_gpunetio_sdk_wrapper_init(int *ret) {
             gpunetio_handle, "doca_gpu_verbs_req_notify_cq", 0);
 
     /* Optional symbols */
+    p_doca_gpu_verbs_bridge_export_qp = (doca_gpu_verbs_bridge_export_qp_t)doca_sdk_find_symbol(
+        gpunetio_handle, "doca_gpu_verbs_bridge_export_qp", 0);
+    p_doca_gpu_verbs_unexport_qp = (doca_gpu_verbs_unexport_qp_t)doca_sdk_find_symbol(
+        gpunetio_handle, "doca_gpu_verbs_unexport_qp", 0);
+    p_doca_gpu_verbs_get_qp_dev = (doca_gpu_verbs_get_qp_dev_t)doca_sdk_find_symbol(
+        gpunetio_handle, "doca_gpu_verbs_get_qp_dev", 0);
+
     p_doca_gpu_cap_is_gpu_mem_umem_supported =
         (doca_gpu_cap_is_gpu_mem_umem_supported_t)doca_sdk_find_symbol(
             gpunetio_handle, "doca_gpu_cap_is_gpu_mem_umem_supported", 0);
@@ -388,6 +420,99 @@ doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_verbs_req_notify_cq(void *gpu_dev,
         }
 
         doca_err = p_doca_gpu_verbs_req_notify_cq(gpu_dev, verbs_cq);
+        if (doca_err == DOCA_SUCCESS) {
+            return DOCA_SDK_WRAPPER_SUCCESS;
+        } else {
+            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
+            return DOCA_SDK_WRAPPER_API_ERROR;
+        }
+    } else
+        return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+}
+
+doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_verbs_bridge_is_supported(void) {
+    if (get_sdk_wrapper_env_var() <= 0) return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+
+    if (init_gpunetio_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
+
+    if (p_doca_gpu_verbs_bridge_export_qp == nullptr || p_doca_gpu_verbs_get_qp_dev == nullptr ||
+        p_doca_gpu_verbs_unexport_qp == nullptr) {
+        DOCA_LOG(LOG_ERR,
+                 "DOCA SDK in use lacks doca_gpu_verbs_bridge_export_qp, "
+                 "doca_gpu_verbs_get_qp_dev or doca_gpu_verbs_unexport_qp");
+        return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+    }
+
+    return DOCA_SDK_WRAPPER_SUCCESS;
+}
+
+doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_verbs_bridge_export_qp(
+    void *gpu_dev, uint32_t sq_qpn, void *sq_wqe_addr, uint16_t sq_wqe_num, uint32_t *sq_dbrec,
+    uint64_t *sq_db, size_t uar_size, uint32_t sq_cqn, void *sq_cqe_addr, uint32_t sq_cqe_num,
+    uint32_t *sq_cq_dbrec, uint32_t rq_qpn, void *rq_wqe_addr, uint16_t rq_wqe_num,
+    uint32_t *rq_dbrec, uint32_t rcv_wqe_size, uint32_t rq_cqn, void *rq_cqe_addr,
+    uint32_t rq_cqe_num, uint32_t *rq_cq_dbrec, uint32_t nic_handler, void **qp_sdk) {
+    doca_error_t doca_err;
+
+    if (get_sdk_wrapper_env_var() > 0) {
+        if (init_gpunetio_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
+
+        if (p_doca_gpu_verbs_bridge_export_qp == nullptr) {
+            DOCA_LOG(LOG_ERR, "DOCA SDK symbol doca_gpu_verbs_bridge_export_qp not found at %s",
+                     __func__);
+            return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+        }
+
+        doca_err = p_doca_gpu_verbs_bridge_export_qp(
+            gpu_dev, sq_qpn, sq_wqe_addr, sq_wqe_num, sq_dbrec, sq_db, uar_size, sq_cqn,
+            sq_cqe_addr, sq_cqe_num, sq_cq_dbrec, rq_qpn, rq_wqe_addr, rq_wqe_num, rq_dbrec,
+            rcv_wqe_size, rq_cqn, rq_cqe_addr, rq_cqe_num, rq_cq_dbrec, nic_handler, qp_sdk);
+        if (doca_err == DOCA_SUCCESS) {
+            return DOCA_SDK_WRAPPER_SUCCESS;
+        } else {
+            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
+            return DOCA_SDK_WRAPPER_API_ERROR;
+        }
+    } else
+        return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+}
+
+doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_verbs_unexport_qp(void *gpu_dev, void *qp_sdk) {
+    doca_error_t doca_err;
+
+    if (get_sdk_wrapper_env_var() > 0) {
+        if (init_gpunetio_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
+
+        if (p_doca_gpu_verbs_unexport_qp == nullptr) {
+            DOCA_LOG(LOG_ERR, "DOCA SDK symbol doca_gpu_verbs_unexport_qp not found at %s",
+                     __func__);
+            return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+        }
+
+        doca_err = p_doca_gpu_verbs_unexport_qp(gpu_dev, qp_sdk);
+        if (doca_err == DOCA_SUCCESS) {
+            return DOCA_SDK_WRAPPER_SUCCESS;
+        } else {
+            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
+            return DOCA_SDK_WRAPPER_API_ERROR;
+        }
+    } else
+        return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+}
+
+doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_verbs_get_qp_dev(void *qp_sdk, void **qp_gpu) {
+    doca_error_t doca_err;
+
+    if (get_sdk_wrapper_env_var() > 0) {
+        if (init_gpunetio_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
+
+        if (p_doca_gpu_verbs_get_qp_dev == nullptr) {
+            DOCA_LOG(LOG_ERR, "DOCA SDK symbol doca_gpu_verbs_get_qp_dev not found at %s",
+                     __func__);
+            return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+        }
+
+        doca_err = p_doca_gpu_verbs_get_qp_dev(qp_sdk, qp_gpu);
         if (doca_err == DOCA_SUCCESS) {
             return DOCA_SDK_WRAPPER_SUCCESS;
         } else {

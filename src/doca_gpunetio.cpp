@@ -1247,7 +1247,392 @@ doca_error_t doca_gpu_verbs_get_qp_dev(struct doca_gpu_verbs_qp *qp,
     return status;
 }
 
+/*
+ * Translate the NIC handler of this library into the value the DOCA GPUNetIO SDK gives to the same
+ * handler. The SDK enumeration has one bit per handler while this one combines flags, so the two
+ * only agree on AUTO, CPU proxy and GPU SM DB.
+ */
+static doca_error_t priv_nic_handler_to_sdk(enum doca_gpu_dev_verbs_nic_handler nic_handler,
+                                            uint32_t *sdk_nic_handler) {
+    switch (nic_handler) {
+        case DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO:
+            *sdk_nic_handler = DOCA_GPUNETIO_SDK_NIC_HANDLER_AUTO;
+            return DOCA_SUCCESS;
+        case DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY:
+            *sdk_nic_handler = DOCA_GPUNETIO_SDK_NIC_HANDLER_CPU_PROXY;
+            return DOCA_SUCCESS;
+        case DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB:
+            *sdk_nic_handler = DOCA_GPUNETIO_SDK_NIC_HANDLER_GPU_SM_DB;
+            return DOCA_SUCCESS;
+        case DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF:
+            *sdk_nic_handler = DOCA_GPUNETIO_SDK_NIC_HANDLER_GPU_SM_BF;
+            return DOCA_SUCCESS;
+        case DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_NO_DBR:
+            *sdk_nic_handler = DOCA_GPUNETIO_SDK_NIC_HANDLER_GPU_SM_NO_DBR;
+            return DOCA_SUCCESS;
+        default:
+            /* Free flow is specific to this library: the SDK has no value for it */
+            DOCA_LOG(LOG_ERR, "NIC handler %d has no DOCA GPUNetIO SDK counterpart", nic_handler);
+            return DOCA_ERROR_NOT_SUPPORTED;
+    }
+}
+
+/*
+ * Map the result of an SDK wrapper call onto the error the caller of the library expects.
+ */
+static doca_error_t priv_sdk_wrapper_status(doca_sdk_wrapper_error_t err) {
+    switch (err) {
+        case DOCA_SDK_WRAPPER_SUCCESS:
+            return DOCA_SUCCESS;
+        case DOCA_SDK_WRAPPER_API_ERROR:
+            return DOCA_ERROR_UNEXPECTED;
+        default:
+            return DOCA_ERROR_NOT_SUPPORTED;
+    }
+}
+
+/* Host ranges an export can map for the GPU: the receive WQEs, their DBR, the CQEs, their DBR */
+#define DOCA_GPUNETIO_SDK_QP_MAX_HOST_REGS 4
+
+/*
+ * What an export to the DOCA GPUNetIO SDK owns. struct doca_gpu_verbs_qp keeps it in sdk_qp until
+ * doca_gpu_verbs_unexport_sdk_qp() releases it.
+ */
+struct doca_gpu_verbs_sdk_qp {
+    void *qp_sdk;     /* SDK struct doca_gpu_verbs_qp, NULL once released */
+    void *qp_sdk_gpu; /* GPU handler of qp_sdk, NULL when the export failed half-way */
+    void *host_regs[DOCA_GPUNETIO_SDK_QP_MAX_HOST_REGS]; /* Host ranges registered with CUDA */
+    uint32_t num_host_regs;
+};
+
+/*
+ * Give the SDK GPU handler an address the GPU can reach. GPU memory, and host memory CUDA already
+ * maps, are used as they are. Plain host memory, like the receive CQ of a high-level QP, is
+ * registered with CUDA, as a GPU without access to pageable memory would fault on it. The
+ * registration is recorded in sdk, so that the release of the export removes it.
+ */
+static doca_error_t priv_sdk_qp_gpu_addr(struct doca_gpu_verbs_sdk_qp *sdk, void *addr, size_t size,
+                                         void **addr_gpu) {
+    const uintptr_t page_size = (uintptr_t)priv_get_page_size();
+    cudaPointerAttributes attr = {};
+    cudaError_t cuda_status;
+    uintptr_t start;
+    uintptr_t end;
+
+    *addr_gpu = nullptr;
+    if (addr == nullptr) return DOCA_SUCCESS;
+
+    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaPointerGetAttributes(&attr, addr));
+    if (cuda_status == cudaSuccess && attr.type == cudaMemoryTypeDevice) {
+        *addr_gpu = addr;
+        return DOCA_SUCCESS;
+    }
+
+    /* Also catches a range in a page an earlier call of the same export registered */
+    if (cuda_status == cudaSuccess && attr.type != cudaMemoryTypeUnregistered &&
+        attr.devicePointer != nullptr) {
+        *addr_gpu = attr.devicePointer;
+        return DOCA_SUCCESS;
+    }
+
+    if (sdk->num_host_regs == DOCA_GPUNETIO_SDK_QP_MAX_HOST_REGS) {
+        DOCA_LOG(LOG_ERR, "Too many host ranges to map for the DOCA GPUNetIO SDK");
+        return DOCA_ERROR_UNEXPECTED;
+    }
+
+    /* CUDA pins whole pages: register exactly those, so that the unregistration matches */
+    start = (uintptr_t)addr & ~(page_size - 1);
+    end = ((uintptr_t)addr + size + page_size - 1) & ~(page_size - 1);
+    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaHostRegister(
+        (void *)start, end - start, cudaHostRegisterPortable | cudaHostRegisterMapped));
+    if (cuda_status != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Function cudaHostRegister (err %d) failed on addr %p size %zu",
+                 cuda_status, (void *)start, (size_t)(end - start));
+        return DOCA_ERROR_DRIVER;
+    }
+    sdk->host_regs[sdk->num_host_regs++] = (void *)start;
+
+    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaHostGetDevicePointer(addr_gpu, addr, 0));
+    if (cuda_status != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Function cudaHostGetDevicePointer (err %d) failed on addr %p",
+                 cuda_status, addr);
+        *addr_gpu = nullptr;
+        return DOCA_ERROR_DRIVER;
+    }
+
+    return DOCA_SUCCESS;
+}
+
+/*
+ * Release what an export to the DOCA GPUNetIO SDK owns. The SDK handler goes first, as its device
+ * code is what reads the mapped host ranges. What can't be released stays in sdk, so that a later
+ * call retries it rather than lose it.
+ */
+static doca_error_t priv_sdk_qp_release(doca_gpu_t *gpu_dev, struct doca_gpu_verbs_sdk_qp *sdk) {
+    doca_sdk_wrapper_error_t err;
+    cudaError_t cuda_status;
+
+    if (sdk->qp_sdk != nullptr) {
+        err = doca_gpu_sdk_wrapper_verbs_unexport_qp(gpu_dev->sdk, sdk->qp_sdk);
+        if (err != DOCA_SDK_WRAPPER_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to release the DOCA GPUNetIO SDK handler, error %d", err);
+            return priv_sdk_wrapper_status(err);
+        }
+        sdk->qp_sdk = nullptr;
+        sdk->qp_sdk_gpu = nullptr;
+    }
+
+    while (sdk->num_host_regs > 0) {
+        void *host_reg = sdk->host_regs[sdk->num_host_regs - 1];
+
+        cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaHostUnregister(host_reg));
+        if (cuda_status != cudaSuccess) {
+            DOCA_LOG(LOG_ERR, "Function cudaHostUnregister (err %d) failed on addr %p", cuda_status,
+                     host_reg);
+            return DOCA_ERROR_DRIVER;
+        }
+        sdk->num_host_regs--;
+    }
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_gpu_verbs_export_sdk_qp(struct doca_gpu_verbs_qp *qp_gverbs, void **qp_sdk_gpu) {
+    struct doca_gpu_dev_verbs_qp *qp_cpu_ = nullptr;
+    struct doca_gpu_verbs_sdk_qp *sdk = nullptr;
+    doca_sdk_wrapper_error_t err;
+    doca_error_t status;
+    doca_error_t tmp_status;
+    uint32_t sdk_nic_handler = DOCA_GPUNETIO_SDK_NIC_HANDLER_AUTO;
+    void *sq_wqe_daddr = nullptr;
+    void *rq_wqe_daddr = nullptr;
+    uint32_t sq_wqe_num = 0;
+    uint32_t rq_wqe_num = 0;
+    uint32_t rcv_wqe_size = 0;
+    uint32_t *dbrec = nullptr;
+    uint64_t *sq_db = nullptr;
+    void *rq_cqe_daddr = nullptr;
+    uint32_t rq_cqe_num = 0;
+    uint8_t rq_cqe_size = 0;
+    uint32_t rq_cqn = 0;
+    uint32_t *rq_cq_dbrec = nullptr;
+    uint64_t *uar_db_reg = nullptr;
+    uint32_t *arm_dbr = nullptr;
+    void *rq_wqe_gpu = nullptr;
+    void *rq_dbrec_gpu = nullptr;
+    void *rq_cqe_gpu = nullptr;
+    void *rq_cq_dbrec_gpu = nullptr;
+
+    if (qp_gverbs == nullptr || qp_sdk_gpu == nullptr) return DOCA_ERROR_INVALID_VALUE;
+
+    if (qp_gverbs->gpu_dev == nullptr || qp_gverbs->qp == nullptr || qp_gverbs->qp_cpu == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA GPUNetIO Verbs QP provided at %s", __func__);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_gverbs->gpu_dev->type != DOCA_GPU_LIB_TYPE_SDK) {
+        DOCA_LOG(LOG_ERR,
+                 "Exporting a QP to the DOCA GPUNetIO SDK requires the SDK: set %s and create the "
+                 "GPU handler again",
+                 DOCA_SDK_LIB_PATH_ENV_VAR);
+        return DOCA_ERROR_NOT_SUPPORTED;
+    }
+
+    /* One SDK handler per QP: it carries the queue indexes the SDK device code advances */
+    if (qp_gverbs->sdk_qp != nullptr) {
+        sdk = (struct doca_gpu_verbs_sdk_qp *)qp_gverbs->sdk_qp;
+        if (sdk->qp_sdk_gpu == nullptr) {
+            DOCA_LOG(LOG_ERR,
+                     "An earlier export of this QP failed half-way: unexport it before exporting "
+                     "it again");
+            return DOCA_ERROR_BAD_STATE;
+        }
+        *qp_sdk_gpu = sdk->qp_sdk_gpu;
+        return DOCA_SUCCESS;
+    }
+
+    /* Never build an SDK handler that couldn't be queried or released afterwards */
+    err = doca_gpu_sdk_wrapper_verbs_bridge_is_supported();
+    if (err != DOCA_SDK_WRAPPER_SUCCESS) return priv_sdk_wrapper_status(err);
+
+    qp_cpu_ = qp_gverbs->qp_cpu;
+
+    status = priv_nic_handler_to_sdk(qp_cpu_->nic_handler, &sdk_nic_handler);
+    if (status != DOCA_SUCCESS) return status;
+
+    /*
+     * The SDK describes a completion queue without a type: its device code chooses collapsed or
+     * not when it is compiled, and it has no value for the CQEs this library can keep in host
+     * memory, so that type can't be handed over.
+     */
+    if (qp_gverbs->cq_type == DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED_HOST) {
+        DOCA_LOG(LOG_ERR,
+                 "The DOCA GPUNetIO SDK has no CQ type for the CQEs in host memory of this QP");
+        return DOCA_ERROR_NOT_SUPPORTED;
+    }
+
+    if (qp_gverbs->cpu_proxy)
+        DOCA_LOG(LOG_WARNING,
+                 "QP needs CPU assistance to ring its doorbell: the SDK handler has its own "
+                 "doorbell state, which only the DOCA SDK progress functions advance");
+
+    /*
+     * The receive queue is mandatory for the SDK export, and this library keeps no receive fields
+     * in its own GPU handler, so read the queues back from the Verbs QP.
+     */
+    status = doca_verbs_qp_get_wq(qp_gverbs->qp, &sq_wqe_daddr, &sq_wqe_num, &rq_wqe_daddr,
+                                  &rq_wqe_num, &rcv_wqe_size);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Can't get QP work queues.");
+        return status;
+    }
+
+    if (rq_wqe_daddr == nullptr || rq_wqe_num == 0 || rcv_wqe_size == 0) {
+        DOCA_LOG(LOG_ERR,
+                 "The DOCA GPUNetIO SDK export needs the receive queue of the QP: create the QP "
+                 "with rq_nwqe > 0");
+        return DOCA_ERROR_NOT_SUPPORTED;
+    }
+
+    if (rq_wqe_num > UINT16_MAX) {
+        DOCA_LOG(LOG_ERR, "Receive queue of %u WQEs doesn't fit the %u WQEs of the SDK export",
+                 rq_wqe_num, (uint32_t)UINT16_MAX);
+        return DOCA_ERROR_NOT_SUPPORTED;
+    }
+
+    status = doca_verbs_qp_get_dbr_addr(qp_gverbs->qp, (void **)&dbrec);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Can't get QP dbr addr.");
+        return status;
+    }
+
+    /*
+     * The CPU address of the doorbell register: the SDK maps it for the GPU itself, and its
+     * mapping call accepts an address this library already registered.
+     */
+    status = doca_verbs_qp_get_uar_addr(qp_gverbs->qp, (void **)&sq_db);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Can't get QP UAR address.");
+        return status;
+    }
+
+    /* The receive CQ is optional: the SDK export only needs one of the two completion queues */
+    if (qp_gverbs->cq_rq != nullptr) {
+        status = doca_verbs_cq_get_wq(qp_gverbs->cq_rq, &rq_cqe_daddr, &rq_cqe_num, &rq_cqe_size);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Can't get RQ CQ work queue.");
+            return status;
+        }
+
+        status =
+            doca_verbs_cq_get_dbr_db_addr(qp_gverbs->cq_rq, &uar_db_reg, &rq_cq_dbrec, &arm_dbr);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Can't get RQ CQ DBR address.");
+            return status;
+        }
+
+        status = doca_verbs_cq_get_cq_num(qp_gverbs->cq_rq, &rq_cqn);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Can't get RQ CQ number.");
+            return status;
+        }
+    }
+
+    sdk = (struct doca_gpu_verbs_sdk_qp *)calloc(1, sizeof(*sdk));
+    if (sdk == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to allocate CPU memory");
+        return DOCA_ERROR_NO_MEMORY;
+    }
+
+    /*
+     * The GPU handler of this library never touches the receive side, so nothing guarantees that
+     * the GPU reaches it: the receive CQ of a high-level QP, for one, is plain host memory.
+     */
+    status =
+        priv_sdk_qp_gpu_addr(sdk, rq_wqe_daddr, (size_t)rq_wqe_num * rcv_wqe_size, &rq_wqe_gpu);
+    if (status == DOCA_SUCCESS)
+        status = priv_sdk_qp_gpu_addr(sdk, dbrec + DOCA_GPUNETIO_IB_MLX5_RCV_DBR, sizeof(uint32_t),
+                                      &rq_dbrec_gpu);
+    if (status == DOCA_SUCCESS)
+        status =
+            priv_sdk_qp_gpu_addr(sdk, rq_cqe_daddr, (size_t)rq_cqe_num * rq_cqe_size, &rq_cqe_gpu);
+    if (status == DOCA_SUCCESS)
+        status = priv_sdk_qp_gpu_addr(sdk, rq_cq_dbrec, 2 * sizeof(uint32_t), &rq_cq_dbrec_gpu);
+    if (status != DOCA_SUCCESS) goto rollback;
+
+    err = doca_gpu_sdk_wrapper_verbs_bridge_export_qp(
+        qp_gverbs->gpu_dev->sdk, qp_cpu_->sq_num, qp_cpu_->sq_wqe_daddr, qp_cpu_->sq_wqe_num,
+        (uint32_t *)qp_cpu_->sq_dbrec, sq_db, DOCA_VERBS_DB_UAR_SIZE, qp_cpu_->cq_sq.cq_num,
+        qp_cpu_->cq_sq.cqe_daddr, qp_cpu_->cq_sq.cqe_num, (uint32_t *)qp_cpu_->cq_sq.dbrec,
+        /* The receive queue of an RC QP carries the QP number */
+        qp_cpu_->sq_num, rq_wqe_gpu, (uint16_t)rq_wqe_num, (uint32_t *)rq_dbrec_gpu, rcv_wqe_size,
+        rq_cqn, rq_cqe_gpu, rq_cqe_num, (uint32_t *)rq_cq_dbrec_gpu, sdk_nic_handler, &sdk->qp_sdk);
+    if (err != DOCA_SDK_WRAPPER_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to export the QP to the DOCA GPUNetIO SDK, error %d", err);
+        sdk->qp_sdk = nullptr;
+        status = priv_sdk_wrapper_status(err);
+        goto rollback;
+    }
+
+    err = doca_gpu_sdk_wrapper_verbs_get_qp_dev(sdk->qp_sdk, &sdk->qp_sdk_gpu);
+    if (err != DOCA_SDK_WRAPPER_SUCCESS || sdk->qp_sdk_gpu == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get the GPU handler of the DOCA GPUNetIO SDK QP, error %d",
+                 err);
+        sdk->qp_sdk_gpu = nullptr;
+        status = (err != DOCA_SDK_WRAPPER_SUCCESS) ? priv_sdk_wrapper_status(err)
+                                                   : DOCA_ERROR_UNEXPECTED;
+        goto rollback;
+    }
+
+    qp_gverbs->sdk_qp = sdk;
+    *qp_sdk_gpu = sdk->qp_sdk_gpu;
+
+    return DOCA_SUCCESS;
+
+rollback:
+    /* Whatever can't be undone stays with the QP, for doca_gpu_verbs_unexport_sdk_qp() to retry */
+    tmp_status = priv_sdk_qp_release(qp_gverbs->gpu_dev, sdk);
+    if (tmp_status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR,
+                 "Failed to roll back the export: the QP keeps it until "
+                 "doca_gpu_verbs_unexport_sdk_qp() succeeds");
+        sdk->qp_sdk_gpu = nullptr;
+        qp_gverbs->sdk_qp = sdk;
+    } else
+        free(sdk);
+
+    return status;
+}
+
+doca_error_t doca_gpu_verbs_unexport_sdk_qp(struct doca_gpu_verbs_qp *qp_gverbs) {
+    struct doca_gpu_verbs_sdk_qp *sdk;
+    doca_error_t status;
+
+    if (qp_gverbs == nullptr) return DOCA_ERROR_INVALID_VALUE;
+
+    /* A QP that was never exported has nothing to release */
+    if (qp_gverbs->sdk_qp == nullptr) return DOCA_SUCCESS;
+
+    if (qp_gverbs->gpu_dev == nullptr || qp_gverbs->gpu_dev->type != DOCA_GPU_LIB_TYPE_SDK) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA GPUNetIO SDK handler provided at %s", __func__);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    sdk = (struct doca_gpu_verbs_sdk_qp *)qp_gverbs->sdk_qp;
+
+    /* What can't be released stays with the QP, so that the call can be retried */
+    status = priv_sdk_qp_release(qp_gverbs->gpu_dev, sdk);
+    if (status != DOCA_SUCCESS) return status;
+
+    free(sdk);
+    qp_gverbs->sdk_qp = nullptr;
+
+    return DOCA_SUCCESS;
+}
+
 doca_error_t doca_gpu_verbs_unexport_qp(doca_gpu_t *gpu_dev, struct doca_gpu_verbs_qp *qp_gverbs) {
+    doca_error_t status;
+
     if (gpu_dev == nullptr || qp_gverbs == nullptr) return DOCA_ERROR_INVALID_VALUE;
 
     if (qp_gverbs->refcount > 0) {
@@ -1256,6 +1641,17 @@ doca_error_t doca_gpu_verbs_unexport_qp(doca_gpu_t *gpu_dev, struct doca_gpu_ver
     if (qp_gverbs->monitored_by) {
         DOCA_LOG(LOG_ERR, "Cannot unexport a QP while its RQ is monitored by a service");
         return DOCA_ERROR_IN_USE;
+    }
+
+    /*
+     * The SDK handler describes queues that are about to go away: release it first. When that
+     * fails, free nothing, so that the caller can retry instead of losing the only reference to
+     * the SDK resources.
+     */
+    status = doca_gpu_verbs_unexport_sdk_qp(qp_gverbs);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to unexport the QP from the DOCA GPUNetIO SDK: %d", status);
+        return status;
     }
 
     if (qp_gverbs->cpu_db &&

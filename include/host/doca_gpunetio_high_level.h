@@ -189,6 +189,9 @@ doca_error_t doca_gpu_verbs_create_qp_hl(struct doca_gpu_verbs_qp_init_attr_hl *
  * DOCA_SUCCESS - in case of success.
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
+ * - DOCA_ERROR_IN_USE - if the QP is monitored by a service.
+ * - Any error of doca_gpu_verbs_unexport_sdk_qp() - if a DOCA GPUNetIO SDK handler of a QP could
+ *   not be released. Nothing is destroyed, and the call can be retried.
  */
 doca_error_t doca_gpu_verbs_destroy_qp_hl(struct doca_gpu_verbs_qp_hl *qp);
 
@@ -229,6 +232,8 @@ doca_error_t doca_gpu_verbs_create_qp_group_hl(struct doca_gpu_verbs_qp_init_att
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
  * - DOCA_ERROR_IN_USE - if a QP of the group is monitored by a service.
+ * - Any error of doca_gpu_verbs_unexport_sdk_qp() - if a DOCA GPUNetIO SDK handler of a QP could
+ *   not be released. Nothing is destroyed, and the call can be retried.
  */
 doca_error_t doca_gpu_verbs_destroy_qp_group_hl(struct doca_gpu_verbs_qp_group_hl *qpg);
 
@@ -343,6 +348,8 @@ doca_error_t doca_gpu_verbs_create_qp_list_hl(struct doca_gpu_verbs_qp_init_attr
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
  * - DOCA_ERROR_IN_USE - if a QP of the list is monitored by a service.
+ * - Any error of doca_gpu_verbs_unexport_sdk_qp() - if a DOCA GPUNetIO SDK handler of a QP could
+ *   not be released. Nothing is destroyed, and the call can be retried.
  */
 doca_error_t doca_gpu_verbs_destroy_qp_list_hl(struct doca_gpu_verbs_qp_list_hl *qp_list);
 
@@ -381,6 +388,8 @@ doca_error_t doca_gpu_verbs_create_qp_group_list_hl(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
  * - DOCA_ERROR_IN_USE - if a QP of the list is monitored by a service.
+ * - Any error of doca_gpu_verbs_unexport_sdk_qp() - if a DOCA GPUNetIO SDK handler of a QP could
+ *   not be released. Nothing is destroyed, and the call can be retried.
  */
 doca_error_t doca_gpu_verbs_destroy_qp_group_list_hl(
     struct doca_gpu_verbs_qp_group_list_hl *qpg_list);

@@ -1382,7 +1382,28 @@ exit_error:
     return status;
 }
 
+/*
+ * Release the DOCA GPUNetIO SDK handler of a QP before anything it describes goes away. When that
+ * fails, the caller must destroy nothing, so that the release can be retried.
+ */
+static doca_error_t qp_hl_release_sdk_qp(struct doca_gpu_verbs_qp_hl *qp) {
+    doca_error_t status;
+
+    if (qp->qp_gverbs == nullptr) return DOCA_SUCCESS;
+
+    status = doca_gpu_verbs_unexport_sdk_qp(qp->qp_gverbs);
+    if (status != DOCA_SUCCESS)
+        DOCA_LOG(LOG_ERR,
+                 "Cannot destroy a high-level QP whose DOCA GPUNetIO SDK handler can't be "
+                 "released: %d",
+                 status);
+
+    return status;
+}
+
 doca_error_t doca_gpu_verbs_destroy_qp_hl(struct doca_gpu_verbs_qp_hl *qp) {
+    doca_error_t status;
+
     if (qp == nullptr) return DOCA_ERROR_INVALID_VALUE;
 
     if (qp->qp_gverbs != nullptr && qp->qp_gverbs->monitored_by) {
@@ -1391,6 +1412,9 @@ doca_error_t doca_gpu_verbs_destroy_qp_hl(struct doca_gpu_verbs_qp_hl *qp) {
                  "first");
         return DOCA_ERROR_IN_USE;
     }
+
+    status = qp_hl_release_sdk_qp(qp);
+    if (status != DOCA_SUCCESS) return status;
 
     doca_gpu_verbs_destroy_qp_hl_internal(qp);
     free(qp);
@@ -1623,6 +1647,8 @@ static bool qp_hl_is_monitored(const struct doca_gpu_verbs_qp_hl *qp) {
 }
 
 doca_error_t doca_gpu_verbs_destroy_qp_group_hl(struct doca_gpu_verbs_qp_group_hl *qpg) {
+    doca_error_t status;
+
     if (qpg == nullptr) return DOCA_ERROR_INVALID_VALUE;
 
     if (qp_hl_is_monitored(&qpg->qp_main) || qp_hl_is_monitored(&qpg->qp_companion)) {
@@ -1631,6 +1657,10 @@ doca_error_t doca_gpu_verbs_destroy_qp_group_hl(struct doca_gpu_verbs_qp_group_h
                  "service first");
         return DOCA_ERROR_IN_USE;
     }
+
+    status = qp_hl_release_sdk_qp(&qpg->qp_main);
+    if (status == DOCA_SUCCESS) status = qp_hl_release_sdk_qp(&qpg->qp_companion);
+    if (status != DOCA_SUCCESS) return status;
 
     doca_gpu_verbs_destroy_qp_hl_internal(&qpg->qp_main);
     qpg->qp_companion.external_uar = nullptr;
@@ -1978,6 +2008,11 @@ doca_error_t doca_gpu_verbs_destroy_qp_list_hl(struct doca_gpu_verbs_qp_list_hl 
                      i);
             return DOCA_ERROR_IN_USE;
         }
+    }
+
+    for (uint32_t i = 0; i < qp_list->num_qps; i++) {
+        doca_error_t status = qp_hl_release_sdk_qp(&qp_list->qps[i]);
+        if (status != DOCA_SUCCESS) return status;
     }
 
     doca_gpu_t *gpu_dev = NULL;
@@ -2328,6 +2363,12 @@ doca_error_t doca_gpu_verbs_destroy_qp_group_list_hl(
                      i);
             return DOCA_ERROR_IN_USE;
         }
+    }
+
+    for (uint32_t i = 0; i < qpg_list->num_qp_groups; i++) {
+        doca_error_t status = qp_hl_release_sdk_qp(&qpg_list->qpgs[i].qp_main);
+        if (status == DOCA_SUCCESS) status = qp_hl_release_sdk_qp(&qpg_list->qpgs[i].qp_companion);
+        if (status != DOCA_SUCCESS) return status;
     }
 
     doca_gpu_t *gpu_dev = NULL;

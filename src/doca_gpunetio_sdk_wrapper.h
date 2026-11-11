@@ -76,6 +76,55 @@ doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_cap_is_host_mem_umem_supported(voi
 doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_cap_is_nic_handler_gpu_sm_db_supported(void *gpu_dev,
                                                                                      void *net_dev);
 
+/*
+ * Values of enum doca_gpu_dev_verbs_nic_handler of the DOCA GPUNetIO SDK. The SDK gives one bit to
+ * each handler, while this library combines flags, so the two enumerations don't share the values
+ * of the handlers that set more than one flag. Translate before calling the SDK.
+ */
+#define DOCA_GPUNETIO_SDK_NIC_HANDLER_AUTO 0u
+#define DOCA_GPUNETIO_SDK_NIC_HANDLER_CPU_PROXY (1u << 0)
+#define DOCA_GPUNETIO_SDK_NIC_HANDLER_GPU_SM_DB (1u << 1)
+#define DOCA_GPUNETIO_SDK_NIC_HANDLER_GPU_SM_BF (1u << 2)
+#define DOCA_GPUNETIO_SDK_NIC_HANDLER_GPU_SM_NO_DBR (1u << 3)
+#define DOCA_GPUNETIO_SDK_NIC_HANDLER_CPU_PROXY_NO_DBR (1u << 4)
+
+/*
+ * Check that the DOCA SDK in use has every entry point the export of a QP relies on:
+ * doca_gpu_verbs_bridge_export_qp(), doca_gpu_verbs_get_qp_dev() and doca_gpu_verbs_unexport_qp().
+ * Checked before building an SDK handler, so that none is built that couldn't be queried or
+ * released.
+ */
+doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_verbs_bridge_is_supported(void);
+
+/*
+ * Build an SDK GPUNetIO Verbs QP out of the queues of a QP this library owns.
+ *
+ * Wraps doca_gpu_verbs_bridge_export_qp(). nic_handler is a DOCA_GPUNETIO_SDK_NIC_HANDLER_* value,
+ * not one of this library. qp_sdk receives the SDK struct doca_gpu_verbs_qp CPU handler.
+ */
+doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_verbs_bridge_export_qp(
+    void *gpu_dev, uint32_t sq_qpn, void *sq_wqe_addr, uint16_t sq_wqe_num, uint32_t *sq_dbrec,
+    uint64_t *sq_db, size_t uar_size, uint32_t sq_cqn, void *sq_cqe_addr, uint32_t sq_cqe_num,
+    uint32_t *sq_cq_dbrec, uint32_t rq_qpn, void *rq_wqe_addr, uint16_t rq_wqe_num,
+    uint32_t *rq_dbrec, uint32_t rcv_wqe_size, uint32_t rq_cqn, void *rq_cqe_addr,
+    uint32_t rq_cqe_num, uint32_t *rq_cq_dbrec, uint32_t nic_handler, void **qp_sdk);
+
+/*
+ * Destroy an SDK GPUNetIO Verbs QP built by doca_gpu_sdk_wrapper_verbs_bridge_export_qp().
+ *
+ * Wraps doca_gpu_verbs_unexport_qp() of the SDK: it frees the GPU handler and the CPU object, and
+ * leaves the queues themselves alone.
+ */
+doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_verbs_unexport_qp(void *gpu_dev, void *qp_sdk);
+
+/*
+ * Get the GPU handler of an SDK GPUNetIO Verbs QP.
+ *
+ * Wraps doca_gpu_verbs_get_qp_dev() of the SDK: qp_gpu receives a GPU pointer to the SDK struct
+ * doca_gpu_dev_verbs_qp, whose layout is the SDK one.
+ */
+doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_verbs_get_qp_dev(void *qp_sdk, void **qp_gpu);
+
 #ifdef __cplusplus
 }
 #endif
