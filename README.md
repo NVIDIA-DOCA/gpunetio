@@ -164,10 +164,15 @@ Wed Apr  1 10:41:52 2026 [INFO] [src/doca_verbs_umem.cpp]: 161: doca_verbs_umem_
 
 ## Examples
 
-Two examples are included to demonstrate usage and measure performance.
+Six examples are included to demonstrate usage and measure performance.
 Make sure to build `libdoca_gpunetio.so` **before compiling examples**.
 
 > All examples require both a client and a server running on network-connected machines.
+> Client and server must run the same example with the same number of iterations (`-i`): they check it when they connect and stop on a mismatch.
+> With the AUTO NIC handler, an example falls back to CPU proxy, and starts the CPU proxy thread, when the GPU can't ring the NIC doorbell.
+> NIC handler 10 (GPU SM no DBR) rings the doorbell from the GPU without updating the doorbell record. It uses the NIC hardware no-DBR mode when available (ConnectX-8), otherwise the software-emulated one, which needs GDRCopy and runs a CPU thread that updates the doorbell record. In `gpunetio_verbs_write_lat`, `-r 1` (hardware) or `-r 2` (software-emulated) selects the mode; BlueFlame (`-p 6`) can't use `-r 2`, as it writes the doorbell record from the GPU.
+> NIC handler 17 (CPU proxy free flow): the GPU marks each WQE ready and a CPU thread rings the doorbell.
+> Data Direct (`-z 1`) registers the GPU buffers through the NIC Data Direct device. Each side only changes its own registrations, so pass it to both client and server. It needs CUDA 12.8 or newer and a Data Direct-capable libmlx5, both detected at build time by `scripts/configure`, and a NIC that exposes a Data Direct device.
 > GPU timers can be enabled per operation by setting `#define KERNEL_DEBUG_TIMES 1` (useful for debugging, not recommended for performance testing).
 
 Additional samples are available in the [NVIDIA DOCA Full Samples repository](https://github.com/NVIDIA-DOCA/doca-samples).
@@ -177,7 +182,7 @@ The following command lines assume samples are running on systems where GPU is a
 ### Example 1: `gpunetio_verbs_put_bw`
 
 This example is a GDAKI perftest `ib_write_bw`-like benchmark where client launches a CUDA kernel to execute the high-level `doca_gpu_dev_verbs_put` operation.
-Server doesn't launch any CUDA kernel: upon user typing ctrl+c, server validate data received from client.
+Server doesn't launch any CUDA kernel: once the client reports that all its runs have completed, server validates the data received from client and exits. Server fails without validating if the client closes the connection first, for example on an error, or if ctrl+c stops the wait.
 
 **Run (server):**
 ```bash
@@ -192,7 +197,8 @@ LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=
 Modes:
 - **CUDA Thread execution scope** (default).
 - **CUDA Warp execution scope**: add `-e 1`.
-- **NIC handler type**: add `-p <nic_handler value>` where 0: AUTO (default), 1: CPU Proxy, 2: GPU SM DB.
+- **NIC handler type**: add `-p <nic_handler value>` where 0: AUTO (default), 1: CPU Proxy, 2: GPU SM DB, 10: GPU SM no DBR, 17: CPU Proxy free flow.
+- **Data Direct**: add `-z 1`. The server buffers are then in GPU memory too.
 
 Validation success message (server):
 ```
@@ -214,11 +220,14 @@ LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=
 ```
 
 Modes:
-- **NIC handler type**: add `-p <nic_handler value>` where 0: AUTO (default), 1: CPU Proxy, 2: GPU SM DB, 6: GPU SM BlueFlame.
+- **NIC handler type**: add `-p <nic_handler value>` where 0: AUTO (default), 1: CPU Proxy, 2: GPU SM DB, 6: GPU SM BlueFlame, 10: GPU SM no DBR, 17: CPU Proxy free flow.
+- **Data Direct**: add `-z 1`.
 
 ### Example 3: `gpunetio_verbs_write_bw`
 
-This example is a GDAKI perftest `ib_write_bw`-like benchmark where Client and server both launch CUDA kernels using low-level APIs.
+This example is a GDAKI perftest `ib_write_bw`-like benchmark where client launches a CUDA kernel using low-level APIs.
+Server doesn't launch any CUDA kernel: once the client reports that all its runs have completed, server validates the data received from client and exits. Server fails without validating if the client closes the connection first, for example on an error, or if ctrl+c stops the wait.
+The kernel posts all the writes before polling the last completion, so the number of iterations (`-i`) can't exceed the send queue size, 2048.
 
 **Run (server):**
 ```bash
@@ -231,7 +240,8 @@ LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=
 ```
 
 Modes:
-- **NIC handler type**: add `-p <nic_handler value>` where 0: AUTO (default), 1: CPU Proxy, 2: GPU SM DB.
+- **NIC handler type**: add `-p <nic_handler value>` where 0: AUTO (default), 1: CPU Proxy, 2: GPU SM DB, 10: GPU SM no DBR, 17: CPU Proxy free flow.
+- **Data Direct**: add `-z 1`. The server buffers are then in GPU memory too.
 
 GPU SM BlueFlame is not supported in this example.
 
@@ -270,7 +280,8 @@ Validation successful! Data read correctly from server
 ### Example 5: `gpunetio_verbs_put_signal_bw`
 
 This example is a GDAKI perftest `ib_write_bw`-like benchmark where client launches a CUDA kernel to execute the high-level `doca_gpu_dev_verbs_put_signal` operation: each CUDA thread writes its own chunk of the server buffer, then adds 1 to its own server signal with an atomic fetch and add, which returns the previous signal value to the client.
-Server doesn't launch any CUDA kernel: once the client reports that all its runs have completed, server validates the data received from client, logs the sum of its signal values for each message size and exits. Server fails without validating if the client closes the connection first, for example on an error, or if ctrl+c stops the wait.
+With `-w 1` each CUDA thread executes instead the high-level `doca_gpu_dev_verbs_put_immediate` operation: a single RDMA Write with Immediate, whose immediate carries the thread's own signal id and the value 1 to add to it. Server creates a rank-local signal map with `doca_gpu_verbs_signal_map_create()` and registers one signal per CUDA thread and message size with `doca_gpu_verbs_signal_register_range()`, so that the signal id of a CUDA thread is (message size index * CUDA threads) + CUDA thread index. A service, given the map with `doca_gpu_verbs_service_set_signal_map()` and the QP with `doca_gpu_verbs_service_monitor_qp()`, drains the QP receive queue, adds the value of each immediate to the GPU memory slot of its signal id, and returns the receive credits to the NIC. There is no remote signal address, no memory key, and no previous value returned to the client.
+Server doesn't launch the benchmark kernel: once the client reports that all its runs have completed, server validates the data received from client, logs the sum of its signal values for each message size and exits. With `-w 1` that report only means the server NIC acknowledged the client's writes, and the service may still be adding their values: the server first waits, up to 10 seconds, until every signal reaches 2 × (iterations / CUDA threads), counting the short ones with a small CUDA kernel because the host can't copy registered signals, and then checks that each signal holds exactly that value. Server fails without validating if the client closes the connection first, for example on an error, or if ctrl+c stops the wait.
 
 **Run (server):**
 ```bash
@@ -286,6 +297,7 @@ Modes:
 - **CUDA Thread execution scope** (default).
 - **CUDA Warp execution scope**: add `-e 1`. Each warp then posts the puts of its threads together with a single fetch and add, on the signal of its lane 0.
 - **NIC handler type**: add `-p <nic_handler value>` where 0: AUTO (default), 1: CPU Proxy, 2: GPU SM DB, 10: GPU SM no DBR, 17: CPU Proxy free flow.
+- **RDMA Write with Immediate and signal map**: add `-w 1`, on both peers. The server QP is then created with a receive queue, and its signals are the slots of its signal map, in GPU memory even without Data Direct. Requires GDRCopy, which maps the receive doorbell record and the signal slots for the CPU. Thread scope only: the immediate of a single RDMA Write carries a single signal id, so `-e 1` is rejected.
 - **Data Direct**: add `-z 1`. The server buffers and signals are then in GPU memory too.
 
 Validation success message (server):
@@ -296,6 +308,7 @@ Validation successful! Data received correctly from client
 ### Example 6: `gpunetio_verbs_put_signal_lat`
 
 This example is a GDAKI perftest `ib_write_lat`-like benchmark where client and server both launch a single CUDA thread kernel. Each message is a high-level `doca_gpu_dev_verbs_put_signal` operation, and each side polls its own signal, which the other side increments after writing the message, to know when the message has arrived.
+With `-w 1` each message is instead a high-level `doca_gpu_dev_verbs_put_immediate` operation: a single RDMA Write with Immediate, whose immediate carries the signal id of the remote peer and the value 1 to add to it. Both peers create a rank-local signal map with `doca_gpu_verbs_signal_map_create()` and register one signal per message size with `doca_gpu_verbs_signal_register()`, so that the signal id of a message size is its index. As the map is rank-local, both peers use the same ids, and each one signals the id of the message size it is sending. A service, given the map with `doca_gpu_verbs_service_set_signal_map()` and the QP with `doca_gpu_verbs_service_monitor_qp()`, drains the QP receive queue and adds the value of each immediate to the GPU memory slot its kernel polls.
 
 **Run (server):**
 ```bash
@@ -309,6 +322,7 @@ LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/doca-gpunetio/lib DOCA_GPUNETIO_LOG=
 
 Modes:
 - **NIC handler type**: add `-p <nic_handler value>` where 0: AUTO (default), 1: CPU Proxy, 2: GPU SM DB, 10: GPU SM no DBR, 17: CPU Proxy free flow.
+- **RDMA Write with Immediate and signal map**: add `-w 1`, on both peers. Both QPs are then created with a receive queue, and the signal each side polls is a slot of its own signal map. Requires GDRCopy, which maps the receive doorbell record and the signal slots for the CPU. The service thread also progresses the QP for the CPU proxy NIC handlers, so the sample doesn't start its own CPU proxy thread in this mode.
 - **Data Direct**: add `-z 1`.
 
 GPU SM BlueFlame is not supported in this example.
